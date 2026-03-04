@@ -37,3 +37,4 @@ venv/
 
 # uploads runtime
 backend/uploads/
+backend/app/ml/dataset/pdfs
