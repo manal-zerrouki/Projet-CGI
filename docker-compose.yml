@@ -1,0 +1,51 @@
+version: "3.9"
+
+# ==============================================================
+# Invoice Validator — Stack complète
+#
+# Démarrage :   docker compose up --build
+# Arrêt     :   docker compose down
+# Logs      :   docker compose logs -f backend
+#
+# Frontend  → http://localhost:3000
+# API docs  → http://localhost:8000/docs
+# ==============================================================
+
+services:
+
+  # ── Backend FastAPI + OCR + Gemini ──────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: dockerfile
+    container_name: invoice_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      TESSERACT_CMD: ""
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/app:/app/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Frontend React ──────────────────────────────────────────
+  frontend:
+    build:
+      context: .                      # ← racine du projet
+      dockerfile: frontend/dockerfile # ← chemin vers le dockerfile
+      args:
+        REACT_APP_API_URL: http://localhost:8000
+    container_name: invoice_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

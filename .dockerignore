@@ -1,0 +1,42 @@
+# ── Git ───────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Python ────────────────────────────────────
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv/
+env/
+.pytest_cache
+.coverage
+
+# ── Node — exclure le lourd, garder le nécessaire ──
+frontend/node_modules
+frontend/build
+frontend/.env.local
+
+# ── Uploads & données locales ─────────────────
+backend/uploads/
+*.pdf
+
+# ── Environnement ─────────────────────────────
+.env
+.env.*
+_env
+
+# ── IDE / OS ──────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────
+*.log
+logs/
+
+# ── ML : inutile en prod ──────────────────────
+requirements-ml.txt

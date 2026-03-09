@@ -1,0 +1,45 @@
+# ==============================================================
+# Backend — FastAPI + OCR (Tesseract) + LLM (Gemini)
+# Base : python:3.11-slim (léger, compatible Mac M1/M2 et Windows)
+# ==============================================================
+FROM python:3.11-slim
+
+# Évite les prompts interactifs apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── Dépendances système ────────────────────────────────────────
+# tesseract-ocr          : moteur OCR principal
+# tesseract-ocr-fra      : pack langue française
+# tesseract-ocr-eng      : pack langue anglaise
+# libgl1 + libglib2.0-0  : requis par PyMuPDF / Pillow
+# curl                   : utilisé par le healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-fra \
+    tesseract-ocr-eng \
+    libgl1 \
+    libglib2.0-0 \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Répertoire de travail ──────────────────────────────────────
+WORKDIR /app
+
+# ── Dépendances Python (layer séparé pour profiter du cache) ──
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# ── Code source backend ────────────────────────────────────────
+COPY app/ ./app/
+
+# ── Dossier uploads (monté en volume en prod) ──────────────────
+RUN mkdir -p uploads
+
+# Tesseract est dans /usr/bin/tesseract sur Linux :
+# on s'assure que la valeur Windows du .env ne s'applique pas.
+ENV TESSERACT_CMD=""
+
+# ── Lancement ──────────────────────────────────────────────────
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
