@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.invoice import router as invoice_router
+from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -19,3 +20,7 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/docs")
