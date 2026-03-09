@@ -26,9 +26,11 @@ cffi==2.0.0
 pycparser==2.23
 google-genai==1.64.0
 
-# PDF / OCR 
+# PDF / OCR
 PyMuPDF==1.26.0
 pytesseract==0.3.13
+pillow==11.2.1
 
 # utils
 tqdm==4.67.1
+python-dotenv==1.0.1
