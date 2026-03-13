@@ -1,5 +1,4 @@
 """
-invoice.py  (routes/invoice.py)
 ================================
 Route FastAPI pour l'analyse et la validation des factures PDF.
 
@@ -7,7 +6,7 @@ Endpoint principal :
   POST /analyze
     - Reçoit un fichier PDF
     - Lance l'OCR
-    - Extrait les données via LLM
+    - Extrait les données via LLM (+ détection visuelle cachet si pdf_path fourni)
     - Valide les règles métier
     - Retourne un résultat structuré complet
 """
@@ -70,7 +69,8 @@ async def analyze_invoice(file: UploadFile = File(...)):
             }
 
         # --- Étape 2 : Extraction des données via LLM ---
-        data = extract_invoice_json_from_text(ocr_text)
+        # pdf_path est passé pour activer la détection visuelle du cachet via Gemini Vision
+        data = extract_invoice_json_from_text(ocr_text, pdf_path=file_path)
 
         # --- Étape 3 : Validation métier ---
         result = valider_facture(data)
@@ -79,18 +79,17 @@ async def analyze_invoice(file: UploadFile = File(...)):
         return {
             "status": "ok",
             "step": "completed",
-            "validation": result.statut,           # "accepté" | "rejeté" | "accepté_avec_réserve"
-            "motifs_rejet": result.motifs_rejet,   # liste des rejets bloquants
-            "exceptions": result.exceptions,       # champs complémentaires manquants
-            "warnings": result.warnings,           # incohérences non bloquantes
-            "data": data,                          # JSON complet extrait
+            "validation": result.statut,
+            "motifs_rejet": result.motifs_rejet,
+            "exceptions": result.exceptions,
+            "warnings": result.warnings,
+            "data": data,
             "ocr_preview_lines": format_preview(ocr_text, max_chars=1500).split("\n"),
         }
 
     except Exception as e:
         msg = str(e).lower()
 
-        # Erreur de disponibilité LLM (503)
         if "503" in msg or "unavailable" in msg or "high demand" in msg:
             raise HTTPException(status_code=503, detail=str(e))
 

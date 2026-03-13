@@ -1,5 +1,4 @@
 """
-validation_service.py
 =====================
 Moteur de validation métier des factures :
 
@@ -29,7 +28,7 @@ import re
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTES MÉTIER
 # ══════════════════════════════════════════════════════════════════════════════
-DELAI_MAX_JOURS   = 7      # Facture rejetée si date_facture > aujourd'hui - 7j
+DELAI_MAX_JOURS   = 7      # Warning si date_facture > aujourd'hui - 7j (non bloquant)
 TOLERANCE_MONTANT = 0.005  # 0.5 % pour TTC = HT + TVA
 TOLERANCE_TVA     = 0.01   # 1 % pour taux TVA cohérent
 
@@ -230,7 +229,7 @@ def _filtrer_warnings_llm(warnings_llm: list) -> List[str]:
 
 CHAMPS_OBLIGATOIRES = {
     "prestataire"   : "Nom du prestataire manquant",
-    "ice"           : "ICE (Identifiant Commun de l'Entreprise) manquant",
+    # ICE géré séparément — uniquement pour les factures marocaines
     "date_facture"  : "Date de facture manquante",
     "numero_facture": "Numéro de facture manquant",
     "montant_ht"    : "Montant HT manquant",
@@ -239,12 +238,39 @@ CHAMPS_OBLIGATOIRES = {
     "montant_ttc"   : "Montant TTC manquant",
 }
 
+# Devises et indicateurs de factures étrangères (hors Maroc)
+# Devises étrangères telles que retournées par Gemini
+# Gemini retourne : "MAD", "EUR", "USD" ou null
+_DEVISES_ETRANGERES = {"eur", "usd", "gbp", "chf"}
+
+
+def _est_facture_marocaine(data: Dict[str, Any]) -> bool:
+    """
+    Détermine si la facture est marocaine (ICE obligatoire) ou étrangère.
+    Se base sur le champ 'devise' extrait par Gemini ("MAD", "EUR", "USD", null).
+
+    Règle :
+      - devise == "MAD" ou null → marocaine (contexte CGI Maroc par défaut)
+      - devise == "EUR" / "USD" / autre devise étrangère → étrangère, ICE non requis
+    """
+    devise = str(data.get("devise") or "").upper().strip()
+
+    if devise in _DEVISES_ETRANGERES:
+        return False
+
+    # "MAD", "" (null), ou toute autre valeur → on suppose marocaine
+    return True
+
 
 def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
     motifs = []
     for champ, message in CHAMPS_OBLIGATOIRES.items():
         if _is_blank(data.get(champ)):
             motifs.append(message)
+
+    # ICE : obligatoire uniquement pour les factures marocaines
+    if _est_facture_marocaine(data) and _is_blank(data.get("ice")):
+        motifs.append("ICE (Identifiant Commun de l'Entreprise) manquant")
 
     # cachet_signature est renseigné par llm_service (texte + vision Gemini).
     # On lit simplement la valeur finale ici.
@@ -278,10 +304,10 @@ def _valider_delai(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
 
     if today > limite:
         jours_retard = (today - limite).days
-        motifs.append(
-            f"Facture expirée : datée du {date_facture.strftime('%d/%m/%Y')}, "
+        warnings.append(
+            f"Délai dépassé : facture datée du {date_facture.strftime('%d/%m/%Y')}, "
             f"délai de {DELAI_MAX_JOURS}j dépassé de {jours_retard} jour(s) "
-            f"(limite : {limite.strftime('%d/%m/%Y')})"
+            f"(limite : {limite.strftime('%d/%m/%Y')}) — vérification manuelle recommandée"
         )
     elif today == date_facture:
         warnings.append("Facture datée d'aujourd'hui — vérifier la date si besoin")
@@ -410,7 +436,7 @@ def valider_facture(data: Dict[str, Any]) -> ValidationResult:
 
     # ── Passe 2 : Délai des 7 jours ───────────────────────────────────────────
     motifs_delai, warnings_delai = _valider_delai(data)
-    all_motifs.extend(motifs_delai)
+    all_warnings.extend(motifs_delai)   # délai : warning uniquement, non bloquant
     all_warnings.extend(warnings_delai)
 
     # ── Passe 3 : Cohérence des montants ──────────────────────────────────────
