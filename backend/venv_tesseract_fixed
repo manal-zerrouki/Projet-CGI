@@ -1,0 +1,1 @@
+# Fix Tesseract pour backend\nsource backend/venv/bin/activate\ncd backend\nexport PATH=\"/usr/local/bin:/usr/local/opt/tesseract/bin:\$PATH\"\nuvicorn app.main:app --host 127.0.0.1 --port 8000 --reload\n\n# Frontend\n# cd frontend && npm start\n\n# Test\n# curl http://127.0.0.1:8000/health
