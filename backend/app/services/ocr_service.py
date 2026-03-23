@@ -27,9 +27,8 @@ load_dotenv()
 # Configurable via .env : TESSERACT_CMD=/usr/bin/tesseract  (Linux/Mac)
 #                         TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe  (Windows)
 # =========================
-tesseract_cmd = os.getenv("TESSERACT_CMD", "").strip()
-if tesseract_cmd:
-    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+tesseract_cmd = os.getenv("TESSERACT_CMD", "/opt/local/bin/tesseract").strip()
+pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 
 
 def _clean_text(text: str) -> str:
