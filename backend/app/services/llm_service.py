@@ -335,18 +335,21 @@ def _detect_cachet_gemini(pdf_path: str) -> tuple:
 # =========================
 def _post_validate(data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Validation numérique backend après extraction LLM :
-      - HT + TVA ≈ TTC
-      - taux_tva cohérent avec TVA/HT
-      - warning si TTC en lettres manquant
+    Post-traitement après extraction LLM :
+      - Normalise les types numériques (str → float)
+      - Warning si montant TTC en lettres manquant
+      - S'assure que autres_montants est un dict
 
-    Ne gère PAS net_a_payer : délégué à validation_service car certaines
-    factures utilisent une formule alternative (HT hors RG - Retenue).
+    Les vérifications de cohérence (HT+TVA=TTC, taux TVA, net_a_payer)
+    sont entièrement déléguées à validation_service pour éviter les doublons.
+    validation_service les traite de façon bloquante (motifs_rejet), ce qui
+    est plus approprié que de simples warnings ici.
     """
     warnings = data.get("warnings", [])
     if not isinstance(warnings, list):
         warnings = []
 
+    # Normaliser les types numériques (le LLM peut retourner des strings)
     ht      = _to_float(data.get("montant_ht"))
     tva     = _to_float(data.get("tva"))
     ttc     = _to_float(data.get("montant_ttc"))
@@ -354,43 +357,20 @@ def _post_validate(data: Dict[str, Any]) -> Dict[str, Any]:
     retenue = _to_float(data.get("retenue_source"))
     net     = _to_float(data.get("net_a_payer"))
 
-    # 1) Cohérence HT + TVA ≈ TTC
-    if ht is not None and tva is not None and ttc is not None and ttc != 0:
-        diff = abs((ht + tva) - ttc)
-        if diff > abs(ttc) * 0.005:
-            warnings.append(
-                f"Incohérence numérique: HT ({ht}) + TVA ({tva}) ≠ TTC ({ttc})"
-            )
-
-    # 2) Cohérence taux TVA
-    if ht is not None and tva is not None and ht != 0 and taux is not None:
-        expected_tva = ht * (taux / 100.0)
-        diff = abs(expected_tva - tva)
-        tol  = max(abs(expected_tva) * 0.01, 0.01)
-        if diff > tol:
-            warnings.append(
-                f"Incohérence: taux_tva ({taux}%) appliqué à HT ({ht}) "
-                f"donne {expected_tva:.2f}, mais TVA extraite = {tva}"
-            )
-
-    # 3) net_a_payer — PAS de warning ici
-    #    Géré par validation_service avec logique formule alternative.
-
-    # 4) Montant TTC en lettres manquant
-    if REQUIRE_TTC_LETTERS:
-        ttc_letters = data.get("montant_ttc_lettres")
-        if ttc_letters is None or (isinstance(ttc_letters, str) and len(ttc_letters.strip()) < 3):
-            warnings.append("Montant TTC en lettres introuvable/illisible (requis pour contrôle)")
-
-    data["warnings"] = warnings
-
-    # Normaliser les types numériques
     for field, val in [
         ("montant_ht", ht), ("tva", tva), ("montant_ttc", ttc),
         ("taux_tva", taux), ("retenue_source", retenue), ("net_a_payer", net),
     ]:
         if val is not None:
             data[field] = val
+
+    # Warning TTC en lettres manquant — non géré par validation_service
+    if REQUIRE_TTC_LETTERS:
+        ttc_letters = data.get("montant_ttc_lettres")
+        if ttc_letters is None or (isinstance(ttc_letters, str) and len(ttc_letters.strip()) < 3):
+            warnings.append("Montant TTC en lettres introuvable/illisible (requis pour contrôle)")
+
+    data["warnings"] = warnings
 
     # S'assurer que autres_montants est bien un dict
     if not isinstance(data.get("autres_montants"), dict):

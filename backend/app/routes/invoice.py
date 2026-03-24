@@ -1,5 +1,4 @@
 """
-invoice.py  (routes/invoice.py)
 ================================
 Route FastAPI pour l'analyse et la validation des factures PDF.
 
@@ -7,7 +6,7 @@ Endpoint principal :
   POST /analyze
     - Reçoit un fichier PDF
     - Lance l'OCR
-    - Extrait les données via LLM
+    - Extrait les données via LLM (+ détection visuelle cachet si pdf_path fourni)
     - Valide les règles métier
     - Retourne un résultat structuré complet
 """
@@ -26,7 +25,6 @@ router = APIRouter()
 UPLOAD_FOLDER = "uploads"
 
 
-# 🔧 sécuriser les valeurs numériques
 def safe_float(value):
     try:
         return float(value)
@@ -34,7 +32,6 @@ def safe_float(value):
         return None
 
 
-# 🔧 convertir date string → date MySQL
 def safe_date(date_str):
     try:
         return datetime.strptime(date_str, "%d-%m-%Y").date()
@@ -45,11 +42,9 @@ def safe_date(date_str):
 @router.post("/analyze")
 async def analyze_invoice(file: UploadFile = File(...)):
 
-    # --- Vérification du type de fichier ---
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
 
-    # --- Sauvegarde du PDF ---
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
 
@@ -57,9 +52,7 @@ async def analyze_invoice(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # =========================
-        # 1. OCR
-        # =========================
+        # OCR
         ocr_text = extract_text_from_pdf(file_path)
 
         if not ocr_text or len(ocr_text.strip()) < 20:
@@ -75,19 +68,13 @@ async def analyze_invoice(file: UploadFile = File(...)):
                 "ocr_preview_lines": [],
             }
 
-        # =========================
-        # 2. LLM extraction
-        # =========================
-        data = extract_invoice_json_from_text(ocr_text)
+        # LLM extraction
+        data = extract_invoice_json_from_text(ocr_text, pdf_path=file_path)
 
-        # =========================
-        # 3. Validation métier
-        # =========================
+        # Validation
         result = valider_facture(data)
 
-        # =========================
-        # 4. INSERT DB 
-        # =========================
+        # INSERT DB
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -125,14 +112,9 @@ async def analyze_invoice(file: UploadFile = File(...)):
             cursor.close()
             conn.close()
 
-            print("Facture enregistrée en DB")
-
         except Exception as db_error:
-            print(" DB ERROR:", db_error)
+            print("DB ERROR:", db_error)
 
-        # =========================
-        # 5. RESPONSE
-        # =========================
         return {
             "status": "ok",
             "step": "completed",
@@ -147,7 +129,7 @@ async def analyze_invoice(file: UploadFile = File(...)):
     except Exception as e:
         msg = str(e).lower()
 
-        if "503" in msg or "unavailable" in msg:
+        if "503" in msg or "unavailable" in msg or "high demand" in msg:
             raise HTTPException(status_code=503, detail=str(e))
 
         raise HTTPException(status_code=500, detail=str(e))
