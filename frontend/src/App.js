@@ -46,6 +46,15 @@ function App() {
 
   const data = result?.data ?? result;
 
+  const getTtcLettresCoherence = () => {
+    if (!data?.montant_ttc_lettres) return 'Non renseigné';
+    const hasIncoherence = result.motifs_rejet?.some(m => m.toLowerCase().includes('lettres'));
+    const hasWarning = result.warnings?.some(w => w.toLowerCase().includes('lettres'));
+    if (hasIncoherence) return '❌ Incohérente';
+    if (hasWarning) return '⚠️ Non vérifiable automatiquement';
+    return '✅ Cohérente avec TTC chiffres';
+  };
+
   const FieldCard = ({label, value, type = 'text', highlight = false}) => {
     const isFilled = value != null && value !== '' && value !== false;
     const isAmount = type === 'amount';
@@ -198,22 +207,38 @@ function App() {
               {/* Validation Status */}
               <div style={{textAlign: 'center', marginBottom: '40px'}}>
                 <div style={{
-                  padding: '20px 40px',
+                  display: 'inline-block',
+                  padding: '16px 48px',
                   borderRadius: '20px',
                   fontSize: '1.5rem',
                   fontWeight: 800,
                   color: result.validation === 'accepté' ? '#059669' : result.validation === 'accepté_avec_réserve' ? '#d97706' : '#dc2626',
-                  background: result.validation === 'accepté' ? 'linear-gradient(135deg, #d1fae5, #a7f3d0)' : 
-                              result.validation === 'accepté_avec_réserve' ? 'linear-gradient(135deg, #fef3c7, #fde68a)' : 
+                  background: result.validation === 'accepté' ? 'linear-gradient(135deg, #d1fae5, #a7f3d0)' :
+                              result.validation === 'accepté_avec_réserve' ? 'linear-gradient(135deg, #fef3c7, #fde68a)' :
                               'linear-gradient(135deg, #fee2e2, #fecaca)'
                 }}>
                   {result.validation?.toUpperCase() || 'TRAITEMENT'}
-                  {result.motifs_rejet?.length > 0 && (
-                    <div style={{fontSize: '1rem', marginTop: '8px', color: '#dc2626'}}>
-                      Rejets: {result.motifs_rejet.join(', ')}
-                    </div>
-                  )}
                 </div>
+
+                {result.motifs_rejet?.length > 0 && (
+                  <div style={{marginTop: '24px', textAlign: 'left', maxWidth: '800px', margin: '24px auto 0'}}>
+                    <div style={{fontSize: '1rem', fontWeight: 700, color: '#dc2626', marginBottom: '12px'}}>
+                      🚫 Motifs de rejet
+                    </div>
+                    <ul style={{listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                      {result.motifs_rejet.map((motif, i) => (
+                        <li key={i} style={{
+                          display: 'flex', alignItems: 'flex-start', gap: '10px',
+                          padding: '12px 16px', borderRadius: '10px',
+                          background: '#fff5f5', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.95rem'
+                        }}>
+                          <span style={{flexShrink: 0}}>❌</span>
+                          <span>{motif}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               {/* Main Grid */}
@@ -229,7 +254,11 @@ function App() {
                     <FieldCard label="Date Facture" value={data.date_facture} type="date" />
                     <FieldCard label="Échéance" value={data.date_echeance} type="date" />
                     <FieldCard label="N° Engagement" value={data.numero_engagement} />
-                    <FieldCard label="Cachet/Signature" value={data.cachet_signature ? '✅ Présent' : '❌ Absent'} />
+                    <FieldCard label="Cachet/Signature" value={
+                      data.cachet_signature === true  ? '✅ Présent' :
+                      data.cachet_signature === false ? '❌ Absent' :
+                                                        '⚠️ Non détecté'
+                    } />
                   </div>
                 </div>
 
@@ -245,6 +274,7 @@ function App() {
                     <FieldCard label="Taux TVA" value={data.taux_tva ? `${data.taux_tva}%` : null} />
                     <FieldCard label="TTC" value={data.montant_ttc} type="amount" highlight />
                     <FieldCard label="TTC Lettres" value={data.montant_ttc_lettres} />
+                    <FieldCard label="Cohérence TTC Lettres / Chiffres" value={getTtcLettresCoherence()} />
                     <FieldCard label="Retenue Source" value={data.retenue_source} type="amount" />
                     <FieldCard label="NET À PAYER" value={data.net_a_payer} type="amount" highlight />
                     <FieldCard label="Devise" value={data.devise} />
@@ -253,12 +283,15 @@ function App() {
               </div>
 
               {/* Warnings & JSON */}
-              {(data.warnings?.length > 0 || result.exceptions?.length > 0) && (
+              {(data.warnings?.length > 0 || result.warnings?.length > 0 || result.exceptions?.length > 0) && (
                 <div style={{marginTop: '40px', background: 'white', padding: '32px', borderRadius: '24px', boxShadow: '0 20px 60px rgba(0,0,0,0.1)'}}>
                   <h3 style={{fontSize: '1.5rem', color: '#f59e0b', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px'}}>
                     ⚠️ ALERTES & DÉTAILS
                   </h3>
                   <ul style={{margin: '0', paddingLeft: '24px', fontSize: '1.1rem'}}>
+                    {result.warnings?.map((w, i) => (
+                      <li key={`rw${i}`} style={{color: '#f59e0b', marginBottom: '8px'}}>{w}</li>
+                    ))}
                     {data.warnings?.map((w, i) => (
                       <li key={`w${i}`} style={{color: '#f59e0b', marginBottom: '8px'}}>{w}</li>
                     ))}
@@ -310,7 +343,7 @@ function App() {
         )}
       </div>
 
-      <style jsx>{`
+      <style>{`
         .app {
           min-height: 100vh;
           background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
@@ -320,31 +353,31 @@ function App() {
           background: linear-gradient(135deg, #1e3a8a 0%, #3730a3 50%, #7c3aed 100%);
           color: white;
           padding: 40px 20px;
-          textAlign: 'center';
+          text-align: center;
         }
         .logo {
-          maxWidth: '1200px';
-          margin: '0 auto';
+          max-width: 1200px;
+          margin: 0 auto;
         }
         .main {
-          maxWidth: '1400px';
-          margin: '0 auto';
-          padding: '40px 20px';
+          max-width: 1400px;
+          margin: 0 auto;
+          padding: 40px 20px;
         }
         .upload-section {
-          marginBottom: '60px';
+          margin-bottom: 60px;
         }
         .upload-card {
-          background: 'white';
-          padding: '60px 40px';
-          borderRadius: '32px';
-          boxShadow: '0 25px 80px rgba(0,0,0,0.15)';
-          backdropFilter: 'blur(20px)';
-          border: '1px solid rgba(255,255,255,0.2)';
+          background: white;
+          padding: 60px 40px;
+          border-radius: 32px;
+          box-shadow: 0 25px 80px rgba(0,0,0,0.15);
+          backdrop-filter: blur(20px);
+          border: 1px solid rgba(255,255,255,0.2);
         }
         .upload-btn:hover {
-          transform: 'translateY(-4px)';
-          boxShadow: '0 20px 40px rgba(99,102,241,0.5)';
+          transform: translateY(-4px);
+          box-shadow: 0 20px 40px rgba(99,102,241,0.5);
         }
       `}</style>
     </div>
