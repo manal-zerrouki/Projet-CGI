@@ -20,6 +20,8 @@ from app.services.db_service import get_db_connection
 from app.services.ocr_service import extract_text_from_pdf, format_preview
 from app.services.llm_service import extract_invoice_json_from_text
 from app.services.validation_service import valider_facture
+from app.services.db_service import get_all_factures
+
 
 router = APIRouter()
 UPLOAD_FOLDER = "uploads"
@@ -133,3 +135,11 @@ async def analyze_invoice(file: UploadFile = File(...)):
             raise HTTPException(status_code=503, detail=str(e))
 
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@router.get("/factures")
+def get_factures():
+    try:
+        return get_all_factures()
+    except Exception as e:
+        return {"error": str(e)}

@@ -9,3 +9,23 @@ def get_db_connection():
         password=os.getenv("DB_PASSWORD") or "",
         database=os.getenv("DB_NAME") or "factures_db"
     )
+
+def get_all_factures():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT 
+            numero_facture,
+            prestataire,
+            date_creation
+        FROM factures_cgi
+        ORDER BY date_creation DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
