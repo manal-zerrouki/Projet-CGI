@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import "./App.css";
 
 const API_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
@@ -8,6 +8,27 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [factures, setFactures] = useState([]);
+  const [showHistorique, setShowHistorique] = useState(false);
+
+  const fetchFactures = () => {
+    console.log("FETCH FACTURES START");
+  
+    fetch("http://127.0.0.1:8000/factures") // 🔥 FORCER URL
+      .then(res => {
+        console.log("STATUS:", res.status);
+        return res.json();
+      })
+      .then(data => {
+        console.log("DATA REACT:", data); // 🔥 IMPORTANT
+        setFactures(Array.isArray(data) ? data : []);
+      })
+      .catch(err => console.error("FETCH ERROR:", err));
+  };
+  useEffect(() => {
+    console.log("USE EFFECT RUNNING");
+    fetchFactures();
+  }, []);
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -146,37 +167,47 @@ function App() {
                   </div>
                 )}
               </div>
+              <div style={{ display: "flex", gap: "15px" }}>
 
-              <button 
-                className="upload-btn" 
-                type="submit" 
-                disabled={!file || loading}
-                style={{
-                  padding: '20px 40px',
-                  fontSize: '1.2rem',
-                  fontWeight: 700,
-                  borderRadius: '16px',
-                  border: 'none',
-                  background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%)',
-                  color: 'white',
-                  cursor: file && !loading ? 'pointer' : 'not-allowed',
-                  opacity: file && !loading ? 1 : 0.7,
-                  boxShadow: '0 10px 25px rgba(99, 102, 241, 0.4)',
-                  transition: 'all 0.3s ease'
-                }}
-              >
-                {loading ? (
-                  <>
-                    <span style={{marginRight: '12px'}}>⚡</span>
-                    Analyse en cours...
-                  </>
-                ) : (
-                  <>
-                    <span style={{marginRight: '12px'}}>🚀</span>
-                    Analyser Facture
-                  </>
-                )}
-              </button>
+{/* Bouton analyser */}
+<button 
+  className="upload-btn" 
+  type="submit" 
+  disabled={!file || loading}
+  style={{
+    flex: 1,
+    padding: '20px',
+    fontSize: '1.2rem',
+    fontWeight: 700,
+    borderRadius: '16px',
+    border: 'none',
+    background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #ec4899)',
+    color: 'white',
+    cursor: file && !loading ? 'pointer' : 'not-allowed',
+    opacity: file && !loading ? 1 : 0.7
+  }}
+>
+  {loading ? "Analyse..." : "Analyser Facture"}
+</button>
+
+{/* 🔥 Bouton historique */}
+<button
+  type="button"
+  onClick={() => setShowHistorique(!showHistorique)}
+  style={{
+    padding: '20px',
+    borderRadius: '16px',
+    border: '2px solid #6366f1',
+    background: 'white',
+    color: '#6366f1',
+    fontWeight: 700,
+    cursor: 'pointer'
+  }}
+>
+  📊 Historique
+</button>
+
+</div>
             </form>
 
             {error && (
@@ -341,6 +372,44 @@ function App() {
             </div>
           </div>
         )}
+
+{showHistorique && (
+  <div style={{ marginTop: "60px" }}>
+    <h2 style={{ textAlign: "center" }}>📊 Historique des factures</h2>
+
+    {factures.length === 0 ? (
+      <p style={{ textAlign: "center" }}>Aucune facture</p>
+    ) : (
+      <table style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        textAlign: "left"
+      }}>
+        <thead>
+          <tr>
+            <th style={{ padding: "12px", width: "30%" }}>Numéro</th>
+            <th style={{ padding: "12px", width: "40%" }}>Prestataire</th>
+            <th style={{ padding: "12px", width: "30%" }}>Date</th>
+          </tr>
+        </thead>
+      
+        <tbody>
+          {factures.map((f, i) => (
+            <tr key={i} style={{ borderTop: "1px solid #e5e7eb" }}>
+              <td style={{ padding: "10px" }}>{f.numero_facture}</td>
+              <td style={{ padding: "10px" }}>{f.prestataire}</td>
+              <td style={{ padding: "10px" }}>
+                {f.date_creation
+                  ? new Date(f.date_creation).toLocaleString()
+                  : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>
+)}
       </div>
 
       <style>{`

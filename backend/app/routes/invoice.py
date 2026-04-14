@@ -14,34 +14,39 @@ Endpoint principal :
 from fastapi import APIRouter, UploadFile, File, HTTPException
 import os
 import shutil
+from datetime import datetime
 
+from app.services.db_service import get_db_connection
 from app.services.ocr_service import extract_text_from_pdf, format_preview
 from app.services.llm_service import extract_invoice_json_from_text
 from app.services.validation_service import valider_facture
+from app.services.db_service import get_all_factures
+
 
 router = APIRouter()
 UPLOAD_FOLDER = "uploads"
 
 
+def safe_float(value):
+    try:
+        return float(value)
+    except:
+        return None
+
+
+def safe_date(date_str):
+    try:
+        return datetime.strptime(date_str, "%d-%m-%Y").date()
+    except:
+        return None
+
+
 @router.post("/analyze")
 async def analyze_invoice(file: UploadFile = File(...)):
-    """
-    Analyse complète d'une facture PDF.
 
-    Retourne :
-      - status       : "ok" | "error"
-      - validation   : statut métier ("accepté" | "rejeté" | "accepté_avec_réserve")
-      - motifs_rejet : liste des raisons de rejet (bloquantes)
-      - exceptions   : champs complémentaires manquants (non bloquants)
-      - warnings     : incohérences mineures ou informations
-      - data         : JSON complet extrait par le LLM
-      - ocr_preview_lines : aperçu du texte OCR (pour debug/affichage)
-    """
-    # --- Vérification du type de fichier ---
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
 
-    # --- Sauvegarde du PDF uploadé ---
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
 
@@ -49,17 +54,14 @@ async def analyze_invoice(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # --- Étape 1 : OCR / extraction texte ---
+        # OCR
         ocr_text = extract_text_from_pdf(file_path)
 
         if not ocr_text or len(ocr_text.strip()) < 20:
             return {
                 "status": "error",
                 "step": "ocr",
-                "message": (
-                    "Texte OCR vide ou insuffisant. "
-                    "La facture est peut-être illisible, protégée, ou Tesseract n'est pas installé."
-                ),
+                "message": "Texte OCR insuffisant",
                 "validation": None,
                 "motifs_rejet": [],
                 "exceptions": [],
@@ -68,14 +70,53 @@ async def analyze_invoice(file: UploadFile = File(...)):
                 "ocr_preview_lines": [],
             }
 
-        # --- Étape 2 : Extraction des données via LLM ---
-        # pdf_path est passé pour activer la détection visuelle du cachet via Gemini Vision
+        # LLM extraction
         data = extract_invoice_json_from_text(ocr_text, pdf_path=file_path)
 
-        # --- Étape 3 : Validation métier ---
+        # Validation
         result = valider_facture(data)
 
-        # --- Réponse complète ---
+        # INSERT DB
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            date_facture = safe_date(data.get("date_facture"))
+
+            cursor.execute("""
+                INSERT INTO factures_cgi (
+                    numero_facture,
+                    prestataire,
+                    ice,
+                    date_facture,
+                    numero_engagement,
+                    montant_ht,
+                    tva,
+                    montant_ttc,
+                    devise,
+                    exception
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                data.get("numero_facture"),
+                data.get("prestataire"),
+                data.get("ice"),
+                date_facture,
+                data.get("numero_engagement"),
+                safe_float(data.get("montant_ht")),
+                safe_float(data.get("tva")),
+                safe_float(data.get("montant_ttc")),
+                data.get("devise"),
+                str(result.exceptions)
+            ))
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+        except Exception as db_error:
+            print("DB ERROR:", db_error)
+
         return {
             "status": "ok",
             "step": "completed",
@@ -94,3 +135,11 @@ async def analyze_invoice(file: UploadFile = File(...)):
             raise HTTPException(status_code=503, detail=str(e))
 
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@router.get("/factures")
+def get_factures():
+    try:
+        return get_all_factures()
+    except Exception as e:
+        return {"error": str(e)}
