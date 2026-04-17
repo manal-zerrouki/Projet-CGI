@@ -250,7 +250,7 @@ CHAMPS_OBLIGATOIRES = {
 # Devises et indicateurs de factures étrangères (hors Maroc)
 # Devises étrangères telles que retournées par Gemini
 # Gemini retourne : "MAD", "EUR", "USD" ou null
-_DEVISES_ETRANGERES = {"eur", "usd", "gbp", "chf"}
+_DEVISES_ETRANGERES = {"EUR", "USD", "GBP", "CHF"}
 
 
 def _est_facture_marocaine(data: Dict[str, Any]) -> bool:
@@ -438,7 +438,11 @@ def _valider_champs_complementaires(data: Dict[str, Any]) -> List[str]:
     ]
     # ICE absent sur facture étrangère (EUR/USD/…) → exception non-bloquante uniquement
     if not _est_facture_marocaine(data) and _is_blank(data.get("ice")):
-        exceptions.append("ICE absent (prestataire étranger — vérification manuelle si requis)")
+        devise = str(data.get("devise") or "").upper().strip()
+        exceptions.append(
+            f"Facture étrangère ({devise}) — ICE non applicable pour un prestataire étranger, "
+            "vérification manuelle de l'identifiant fiscal recommandée"
+        )
     return exceptions
 
 

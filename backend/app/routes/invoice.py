@@ -50,7 +50,7 @@ async def analyze_invoice(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
 
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+    file_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4().hex}.pdf")
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
