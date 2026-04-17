@@ -16,6 +16,15 @@ Règles warnings vs motifs_rejet :
   exceptions   → champ manquant non bloquant, statut "accepté_avec_réserve"
   warnings     → informatif uniquement, n'affecte pas le statut
 
+Règles cachet/signature :
+  cachet False → absent confirmé  → rejet bloquant
+  cachet None  → détection incertaine (scan flou, pâle…) → exception non-bloquante (vérification manuelle)
+
+Règles dates :
+  date_facture + 7j dépassée       → avertissement (non bloquant)
+  date_echeance présente dépassée  → rejet bloquant
+  date_echeance absente + facture + 60j dépassée → rejet bloquant
+
 Les warnings générés par le LLM (data["warnings"]) sont filtrés à l'entrée
 pour supprimer les doublons avec ce que ce fichier calcule lui-même.
 """
@@ -268,17 +277,48 @@ def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
         if _is_blank(data.get(champ)):
             motifs.append(message)
 
-    # ICE : obligatoire uniquement pour les factures marocaines
+    # ICE : rejet bloquant si facture MAD/devise inconnue (supposée marocaine) et ICE absent.
+    # Si devise étrangère (EUR, USD…) → géré en exception non-bloquante dans _valider_champs_complementaires.
     if _est_facture_marocaine(data) and _is_blank(data.get("ice")):
         motifs.append("ICE (Identifiant Commun de l'Entreprise) manquant")
 
     # cachet_signature est renseigné par llm_service (texte + vision Gemini).
-    # On lit simplement la valeur finale ici.
+    # False = Gemini confirme l'absence → rejet bloquant
+    # None  = détection incertaine (scan flou, cachet pâle…) → exception non-bloquante
+    #         gérée dans valider_facture pour ne pas rejeter une facture valide
     cachet = data.get("cachet_signature")
     if cachet is False:
         motifs.append("Cachet ou signature absent de la facture")
-    elif cachet is None:
-        motifs.append("Présence du cachet/signature non détectable (champ null)")
+
+    # ── Date d'échéance ───────────────────────────────────────────────────────
+    # Règle 1 : date_echeance présente et dépassée → rejet bloquant
+    # Règle 2 : date_echeance absente ET date_facture + 60j dépassée → rejet bloquant
+    today        = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    date_ech_str = data.get("date_echeance")
+
+    if not _is_blank(date_ech_str):
+        date_ech = _parse_date(date_ech_str)
+        if date_ech is not None and today > date_ech:
+            jours = (today - date_ech).days
+            motifs.append(
+                f"Date d'échéance dépassée : échéance le {date_ech.strftime('%d/%m/%Y')}, "
+                f"dépassée de {jours} jour(s)"
+            )
+    else:
+        # Pas de date d'échéance explicite → délai légal implicite de 60 jours
+        date_fac_str = data.get("date_facture")
+        if not _is_blank(date_fac_str):
+            date_fac = _parse_date(date_fac_str)
+            if date_fac is not None:
+                echeance_implicite = date_fac + timedelta(days=60)
+                if today > echeance_implicite:
+                    jours = (today - echeance_implicite).days
+                    motifs.append(
+                        f"Aucune date d'échéance mentionnée — délai réglementaire 60j dépassé : "
+                        f"facture du {date_fac.strftime('%d/%m/%Y')}, "
+                        f"limite le {echeance_implicite.strftime('%d/%m/%Y')} "
+                        f"(dépassée de {jours} jour(s))"
+                    )
 
     return motifs
 
@@ -305,21 +345,13 @@ def _valider_delai(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     if today > limite:
         jours_retard = (today - limite).days
         warnings.append(
-            f"Délai dépassé : facture datée du {date_facture.strftime('%d/%m/%Y')}, "
-            f"délai de {DELAI_MAX_JOURS}j dépassé de {jours_retard} jour(s) "
-            f"(limite : {limite.strftime('%d/%m/%Y')}) — vérification manuelle recommandée"
+            f"Délai de soumission dépassé : la facture du {date_facture.strftime('%d/%m/%Y')} "
+            f"aurait dû être soumise avant le {limite.strftime('%d/%m/%Y')} "
+            f"(délai interne de {DELAI_MAX_JOURS}j), retard de {jours_retard} jour(s) — "
+            f"vérification manuelle recommandée"
         )
     elif today == date_facture:
         warnings.append("Facture datée d'aujourd'hui — vérifier la date si besoin")
-
-    date_ech_str = data.get("date_echeance")
-    if not _is_blank(date_ech_str):
-        date_ech = _parse_date(date_ech_str)
-        if date_ech is not None and date_ech != limite:
-            warnings.append(
-                f"Date d'échéance inscrite ({date_ech.strftime('%d/%m/%Y')}) "
-                f"différente de date_facture + 7j ({limite.strftime('%d/%m/%Y')}) — informatif"
-            )
 
     return motifs, warnings
 
@@ -394,16 +426,20 @@ CHAMPS_COMPLEMENTAIRES = {
     "montant_ttc_lettres": "Montant TTC en lettres absent",
     "numero_engagement"  : "Numéro d'engagement / bon de commande absent",
     "date_echeance"      : "Date d'échéance absente",
-    "retenue_source"     : "Retenue à la source non mentionnée (peut être normal)",
+    "retenue_source"     : "Retenue à la source non mentionnée",
 }
 
 
 def _valider_champs_complementaires(data: Dict[str, Any]) -> List[str]:
-    return [
+    exceptions = [
         message
         for champ, message in CHAMPS_COMPLEMENTAIRES.items()
         if _is_blank(data.get(champ))
     ]
+    # ICE absent sur facture étrangère (EUR/USD/…) → exception non-bloquante uniquement
+    if not _est_facture_marocaine(data) and _is_blank(data.get("ice")):
+        exceptions.append("ICE absent (prestataire étranger — vérification manuelle si requis)")
+    return exceptions
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -436,7 +472,7 @@ def valider_facture(data: Dict[str, Any]) -> ValidationResult:
 
     # ── Passe 2 : Délai des 7 jours ───────────────────────────────────────────
     motifs_delai, warnings_delai = _valider_delai(data)
-    all_warnings.extend(motifs_delai)   # délai : warning uniquement, non bloquant
+    all_warnings.extend(motifs_delai)   # délai 7j dépassé → avertissement uniquement
     all_warnings.extend(warnings_delai)
 
     # ── Passe 3 : Cohérence des montants ──────────────────────────────────────
@@ -446,6 +482,12 @@ def valider_facture(data: Dict[str, Any]) -> ValidationResult:
 
     # ── Passe 4 : Champs complémentaires ──────────────────────────────────────
     exceptions = _valider_champs_complementaires(data)
+
+    # cachet None = détection incertaine → exception non-bloquante (accepté_avec_réserve)
+    if data.get("cachet_signature") is None:
+        exceptions.append(
+            "Cachet/signature non confirmé visuellement — vérification manuelle requise"
+        )
 
     # ── Statut final ──────────────────────────────────────────────────────────
     if all_motifs:

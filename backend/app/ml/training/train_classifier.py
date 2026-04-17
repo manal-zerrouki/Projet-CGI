@@ -32,8 +32,9 @@ log = logging.getLogger(__name__)
 
 # ── Chemins ──────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(__file__)
-DATASET_CSV = os.path.join(BASE_DIR, "dataset", "dataset.csv")
-MODELS_DIR  = os.path.join(BASE_DIR, "models")
+ML_DIR      = os.path.abspath(os.path.join(BASE_DIR, ".."))
+DATASET_CSV = os.path.join(ML_DIR, "dataset", "dataset.csv")
+MODELS_DIR  = os.path.join(ML_DIR, "models")
 MODEL_PATH  = os.path.join(MODELS_DIR, "classifier.pkl")
 META_PATH   = os.path.join(MODELS_DIR, "classifier_meta.json")
 

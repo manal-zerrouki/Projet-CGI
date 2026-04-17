@@ -14,6 +14,8 @@ Endpoint principal :
 from fastapi import APIRouter, UploadFile, File, HTTPException
 import os
 import shutil
+import json
+import uuid
 from datetime import datetime
 
 from app.services.db_service import get_db_connection
@@ -81,7 +83,20 @@ async def analyze_invoice(file: UploadFile = File(...)):
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # Si numero_facture non extrait → générer un ID unique pour éviter l'échec INSERT
+            if not data.get("numero_facture"):
+                data["numero_facture"] = f"UNKNOWN-{uuid.uuid4().hex[:8].upper()}"
+
             date_facture = safe_date(data.get("date_facture"))
+
+            full_result = {
+                "validation"       : result.statut,
+                "motifs_rejet"     : result.motifs_rejet,
+                "exceptions"       : result.exceptions,
+                "warnings"         : result.warnings,
+                "data"             : data,
+                "ocr_preview_lines": format_preview(ocr_text, max_chars=1500).split("\n"),
+            }
 
             cursor.execute("""
                 INSERT INTO factures_cgi (
@@ -94,9 +109,26 @@ async def analyze_invoice(file: UploadFile = File(...)):
                     tva,
                     montant_ttc,
                     devise,
-                    exception
+                    statut_validation,
+                    exception,
+                    motifs_rejet,
+                    result_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    prestataire       = VALUES(prestataire),
+                    ice               = VALUES(ice),
+                    date_facture      = VALUES(date_facture),
+                    numero_engagement = VALUES(numero_engagement),
+                    montant_ht        = VALUES(montant_ht),
+                    tva               = VALUES(tva),
+                    montant_ttc       = VALUES(montant_ttc),
+                    devise            = VALUES(devise),
+                    statut_validation = VALUES(statut_validation),
+                    exception         = VALUES(exception),
+                    motifs_rejet      = VALUES(motifs_rejet),
+                    result_json       = VALUES(result_json),
+                    date_creation     = CURRENT_TIMESTAMP
             """, (
                 data.get("numero_facture"),
                 data.get("prestataire"),
@@ -107,7 +139,10 @@ async def analyze_invoice(file: UploadFile = File(...)):
                 safe_float(data.get("tva")),
                 safe_float(data.get("montant_ttc")),
                 data.get("devise"),
-                str(result.exceptions)
+                result.statut,
+                json.dumps(result.exceptions,  ensure_ascii=False),
+                json.dumps(result.motifs_rejet, ensure_ascii=False),
+                json.dumps(full_result,         ensure_ascii=False),
             ))
 
             conn.commit()

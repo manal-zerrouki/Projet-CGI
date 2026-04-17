@@ -6,6 +6,7 @@ build/
 
 # Environment
 .env
+.env.example
 
 # Logs
 *.log
@@ -37,4 +38,8 @@ venv/
 
 # uploads runtime
 backend/uploads/
-backend/app/ml/dataset/pdfs
+
+# ML dataset & models (générés localement)
+backend/app/ml/dataset/pdfs/
+backend/app/ml/dataset/*.csv
+backend/app/ml/models/

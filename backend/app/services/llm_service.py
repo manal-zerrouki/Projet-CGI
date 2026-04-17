@@ -29,7 +29,7 @@ MAX_OCR_CHARS = int(os.getenv("MAX_OCR_CHARS", "15000"))
 REQUIRE_TTC_LETTERS = os.getenv("REQUIRE_TTC_LETTERS", "true").lower() in ("1", "true", "yes", "y")
 
 # Seuil de confiance pour valider une détection visuelle de cachet
-_CACHET_CONFIDENCE_THRESHOLD = 0.55
+_CACHET_CONFIDENCE_THRESHOLD = 0.35
 _CACHET_PDF_DPI               = 200
 
 # Imports optionnels pour la détection visuelle du cachet
@@ -85,9 +85,13 @@ RÈGLES MÉTIER
 - retenue_source : chercher "RAS", "Retenue à la source", "Retenue de garantie", "RS". Mettre null si absent.
 - net_a_payer : montant final après déduction de la retenue à la source (TTC - RAS).
   Si pas de retenue, net_a_payer = montant_ttc.
-- cachet_signature : mettre true si le texte contient des indices de présence d'un cachet ou d'une signature
-  (mots : "cachet", "signature", "lu et approuvé", "certifié", "signé", ou bloc manuscrit détecté).
-  Mettre false sinon.
+- cachet_signature : mettre true si le texte contient des indices de présence d'un cachet ou d'une signature.
+  Indices positifs : mots "cachet", "signature", "lu et approuvé", "certifié", "signé", "visa",
+  "bon pour accord", "docusign", "docusigned", "signed by", "electronic signature",
+  "signé électroniquement", "paraphé", ou présence d'un bloc circulaire (RC, IF, ICE, CNSS groupés
+  en bas de page hors section coordonnées principale — typique des cachets d'entreprise marocains),
+  ou présence d'un pied de page entreprise avec logo + adresse en bas du document.
+  Mettre false uniquement si AUCUN indice n'est présent.
 - autres_montants : dictionnaire clé/valeur pour tout montant présent dans la facture qui ne rentre pas
   dans les champs ci-dessus (ex: "timbre_fiscal": 20.0, "remise": 150.0, "frais_port": 50.0).
   Mettre {} si aucun montant supplémentaire.
@@ -129,21 +133,25 @@ _CACHET_VISION_PROMPT = """
 Analyze this region of an invoice image.
 
 Detect any of the following:
-1. Company stamp or seal (circular, oval, rectangular) — even if partial or faint
-2. Handwritten signature, initials, or paraph
-3. Company logo block at the BOTTOM of the page with name and address — this is the
-   standard authorization footer on French and Moroccan invoices and is a valid
-   official mark even without a physical stamp border
-4. Any ink mark suggesting authorization or validation
-5. Embossed or watermark-style seals
+1. Company stamp or seal — circular, oval, rectangular, even if partially overlapping text or faint
+2. Circular text arranged in a ring/arc around a center (typical Moroccan/French company seal)
+3. Handwritten signature, initials, or paraph
+4. Company logo block at the BOTTOM of the page with name and address — standard authorization
+   footer on French and Moroccan invoices, valid official mark even without a physical stamp border
+5. Any ink mark, colored overlay, or graphic element suggesting authorization or validation
+6. Embossed or watermark-style seals
 
-Do NOT flag:
-- The header logo at the very TOP of the invoice (that is branding, not authorization)
-- Date reception stamps from the recipient/client side (e.g. "received on...")
-- Pure plain-text address blocks with no logo or graphic element
+IMPORTANT — Be INCLUSIVE, not restrictive:
+- A circular arrangement of text (company name, city, registration number) IS a company seal
+  → set cachet_trouve = true, type = company_stamp
+- A company logo/name+address block at the BOTTOM is a valid authorization mark
+  → set cachet_trouve = true, type = logo_stamp
+- When in doubt between "stamp present" and "no stamp", prefer cachet_trouve = true with lower confidence
+- Do NOT require the stamp to be perfectly clear or ink-colored
 
-IMPORTANT: A stylized company logo with address appearing at the BOTTOM of the page
-is a valid authorization mark → set cachet_trouve = true, type = logo_stamp.
+Do NOT flag ONLY these specific cases:
+- The header branding logo at the very TOP of the invoice (top 20% of page)
+- A pure date/reception stamp applied by the RECIPIENT (e.g. "received on...", "ACCUSE DE RECEPTION")
 
 Return ONLY valid JSON, no markdown, no backticks:
 {
@@ -269,15 +277,20 @@ def _detect_cachet_gemini(pdf_path: str) -> tuple:
         pdf_path : chemin vers le fichier PDF
 
     Returns:
-        (found: bool, details: str)
-        Ne lève jamais d'exception : retourne (False, message) en cas d'erreur.
+        (found: Optional[bool], details: str)
+          True  → cachet détecté avec certitude
+          False → toutes les zones analysées, aucun cachet trouvé
+          None  → erreur technique (bibliothèque manquante, API KO, etc.)
+                  → l'appelant doit traiter ça comme "incertain", pas "absent"
     """
     if not _FITZ_AVAILABLE or not _PIL_AVAILABLE:
-        return False, "PyMuPDF ou Pillow non disponible pour la détection visuelle"
+        return None, "PyMuPDF ou Pillow non disponible pour la détection visuelle"
 
     api_key = GOOGLE_API_KEY
     if not api_key:
-        return False, "GOOGLE_API_KEY manquante"
+        return None, "GOOGLE_API_KEY manquante"
+
+    zones_analysed = 0
 
     try:
         client = genai.Client(api_key=api_key)
@@ -309,6 +322,7 @@ def _detect_cachet_gemini(pdf_path: str) -> tuple:
                     result = json.loads(m.group(0))
                     conf   = float(result.get("confidence", 0.0))
                     found  = bool(result.get("cachet_trouve", False))
+                    zones_analysed += 1
 
                     if found and conf >= _CACHET_CONFIDENCE_THRESHOLD:
                         desc = (
@@ -319,15 +333,22 @@ def _detect_cachet_gemini(pdf_path: str) -> tuple:
                         return True, desc
 
                 except Exception:
-                    # Zone ignorée silencieusement, on continue
+                    # Zone ignorée silencieusement, on continue les autres zones
                     continue
 
         doc.close()
 
     except Exception as e:
-        return False, f"Erreur détection cachet : {e}"
+        # Erreur technique globale (ouverture PDF, API Gemini KO…)
+        # → incertain, pas absent : on ne rejette pas sur une erreur technique
+        return None, f"Erreur détection cachet : {e}"
 
-    return False, "Aucun cachet ou signature détecté"
+    # Toutes les zones ont été analysées sans résultat positif
+    if zones_analysed == 0:
+        # Aucune zone n'a pu être analysée (toutes en erreur) → incertain
+        return None, "Aucune zone n'a pu être analysée (erreurs API)"
+
+    return False, "Aucun cachet ou signature détecté après analyse complète"
 
 
 # =========================
@@ -437,10 +458,12 @@ def extract_invoice_json_from_text(
                 validated = _post_validate(parsed)
 
                 # ── Détection visuelle cachet ─────────────────────────────────
-                # Déclenchée uniquement si :
-                #   - pdf_path est fourni (accès au fichier source)
-                #   - ET le LLM n'a pas confirmé de cachet (False ou None)
-                # Si le LLM retourne True → on fait confiance, aucun appel visuel.
+                # Déclenchée si le LLM n'a pas confirmé de cachet (False ou None).
+                # Résultats possibles de _detect_cachet_gemini :
+                #   True  → cachet trouvé visuellement
+                #   False → analysé complètement, rien trouvé (cachet absent)
+                #   None  → erreur technique → traité comme incertain en validation
+                #           (accepté_avec_réserve, pas rejeté)
                 if pdf_path and not validated.get("cachet_signature"):
                     cachet_found, cachet_desc = _detect_cachet_gemini(pdf_path)
                     validated["cachet_signature"] = cachet_found
@@ -455,7 +478,8 @@ def extract_invoice_json_from_text(
                     continue
                 raise
 
-        sleep_s = (2 ** (attempt - 1)) + random.uniform(0.2, 0.8)
+        # Backoff exponentiel : 3s → 5s → 9s (max ~10s) avant chaque retry
+        sleep_s = min(2 ** attempt, 10) + random.uniform(0.5, 1.5)
         time.sleep(sleep_s)
 
     raise RuntimeError(
