@@ -236,7 +236,7 @@ function ResultView({ result, onBack }) {
                 <FieldRow label="Prestataire"         value={d?.prestataire}                   missing highlight/>
                 <FieldRow label="ICE"                 value={d?.ice}                           missing/>
                 <FieldRow label="N° Facture"          value={d?.numero_facture}                missing highlight/>
-                <FieldRow label="N° Engagement CGI"   value={d?.numero_engagement}             missing/>
+                <FieldRow label="N° Engagement"   value={d?.numero_engagement}             missing/>
                 <FieldRow label="Date de facture"     value={fmtDate(d?.date_facture)}         missing/>
                 <FieldRow label="Date d'échéance"     value={fmtDate(d?.date_echeance)}/>
                 <FieldRow label="Cachet / Signature"  value={d?.cachet_signature}              missing/>

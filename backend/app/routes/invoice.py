@@ -16,6 +16,7 @@ import os
 import shutil
 import json
 import uuid
+import time
 from datetime import datetime
 
 from app.services.db_service import get_db_connection
@@ -56,8 +57,12 @@ async def analyze_invoice(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     try:
+        t_start = time.time()
+
         # OCR
         ocr_text = extract_text_from_pdf(file_path)
+        t_after_ocr = time.time()
+        t_ocr_ms = round((t_after_ocr - t_start) * 1000)
 
         if not ocr_text or len(ocr_text.strip()) < 20:
             return {
@@ -72,8 +77,19 @@ async def analyze_invoice(file: UploadFile = File(...)):
                 "ocr_preview_lines": [],
             }
 
+        # Qualité texte OCR
+        ocr_chars = len(ocr_text)
+        ocr_mots  = len(ocr_text.split())
+
         # LLM extraction
         data = extract_invoice_json_from_text(ocr_text, pdf_path=file_path)
+        t_after_llm = time.time()
+        t_llm_ms   = round((t_after_llm - t_after_ocr) * 1000)
+        t_total_ms = round((t_after_llm - t_start)     * 1000)
+
+        # Score confiance LLM : calculé dans llm_service.py sur l'extraction
+        # brute (avant _post_validate) → valeur déjà dans data["confidence"]
+        confidence_llm = int(data.get("confidence") or 0)
 
         # Validation
         result = valider_facture(data)
@@ -96,6 +112,14 @@ async def analyze_invoice(file: UploadFile = File(...)):
                 "warnings"         : result.warnings,
                 "data"             : data,
                 "ocr_preview_lines": format_preview(ocr_text, max_chars=1500).split("\n"),
+                "perf": {
+                    "t_ocr_ms"      : t_ocr_ms,
+                    "t_llm_ms"      : t_llm_ms,
+                    "t_total_ms"    : t_total_ms,
+                    "ocr_chars"     : ocr_chars,
+                    "ocr_mots"      : ocr_mots,
+                    "confidence_llm": confidence_llm,
+                },
             }
 
             cursor.execute("""
@@ -161,6 +185,14 @@ async def analyze_invoice(file: UploadFile = File(...)):
             "warnings": result.warnings,
             "data": data,
             "ocr_preview_lines": format_preview(ocr_text, max_chars=1500).split("\n"),
+            "perf": {
+                "t_ocr_ms"      : t_ocr_ms,
+                "t_llm_ms"      : t_llm_ms,
+                "t_total_ms"    : t_total_ms,
+                "ocr_chars"     : ocr_chars,
+                "ocr_mots"      : ocr_mots,
+                "confidence_llm": confidence_llm,
+            },
         }
 
     except Exception as e:

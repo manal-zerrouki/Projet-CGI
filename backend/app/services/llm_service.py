@@ -72,6 +72,15 @@ IDENTIFICATION DU PRESTATAIRE (RÈGLE CRITIQUE)
 - Ne pas confondre avec : le client (destinataire), les partenaires, les sous-traitants,
   les slogans commerciaux, ou d'autres entités mentionnées dans le corps de la facture.
 - Si plusieurs entités sont présentes, prendre UNIQUEMENT celle associée à l'ICE émetteur.
+- FORMULATION INDIRECTE : si le nom du prestataire apparaît après "Affaires suivies par :",
+  "Suivi par :", "Référent :", "Cabinet :", "Société :", "Émetteur :" → c'est le nom du prestataire.
+- LOGO ILLISIBLE / STYLISÉ : si le logo en haut est une image ou un texte stylisé difficile à lire,
+  chercher le nom dans les champs RC:, IF:, ICE: de l'en-tête — ils appartiennent à l'émetteur.
+- CACHET DE RÉCEPTION : un cachet apposé par le destinataire ("REÇU LE", "ACCUSÉ DE RÉCEPTION",
+  cachet CGI) N'EST PAS le prestataire — c'est le client qui a tamponné le document reçu.
+- CGI, Groupe CGI, CGI Maroc = TOUJOURS le client/destinataire dans ce système, JAMAIS le prestataire.
+  Si "CGI" ressort comme prestataire, c'est une erreur — chercher le vrai émetteur ailleurs.
+- L'ICE 001592148000076 appartient à CGI (le client). S'il apparaît, l'ignorer pour le prestataire.
 
 RÈGLES MÉTIER
 - numero_facture : chercher "Facture n°", "Invoice #", "N° facture". Ne PAS utiliser "Référence client".
@@ -397,6 +406,15 @@ def _post_validate(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(data.get("autres_montants"), dict):
         data["autres_montants"] = {}
 
+    # Filet de sécurité : CGI = toujours client, jamais prestataire
+    p = data.get("prestataire")
+    if isinstance(p, str) and "cgi" in p.lower():
+        data["prestataire"] = None
+
+    # Filet de sécurité : ICE de CGI → forcer null
+    if data.get("ice") == "001592148000076":
+        data["ice"] = None
+
     return data
 
 
@@ -454,7 +472,22 @@ def extract_invoice_json_from_text(
                         ocr_text,
                     ],
                 )
-                parsed    = _extract_json_loose((resp.text or "").strip())
+                parsed = _extract_json_loose((resp.text or "").strip())
+
+                # Score de complétude calculé sur l'extraction BRUTE de Gemini,
+                # avant _post_validate (qui peut nullifier ICE/prestataire pour
+                # des raisons métier non liées à la qualité d'extraction).
+                _CORE_FIELDS = [
+                    "prestataire", "date_facture", "numero_facture",
+                    "montant_ht", "tva", "montant_ttc", "ice",
+                    "numero_engagement", "devise",
+                ]
+                _filled = sum(
+                    1 for k in _CORE_FIELDS
+                    if parsed.get(k) not in (None, "", 0)
+                )
+                parsed["confidence"] = round(_filled / len(_CORE_FIELDS) * 100)
+
                 validated = _post_validate(parsed)
 
                 # ── Détection visuelle cachet ─────────────────────────────────
