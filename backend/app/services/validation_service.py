@@ -301,7 +301,7 @@ def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
         date_ech = _parse_date(date_ech_str)
         if date_ech is not None and today > date_ech:
             warnings.append(
-                f"Délai réglementaire 60j dépassé : facture du {date_fac.strftime('%d/%m/%Y')} — "
+                f"Délai réglementaire dépassé : échéance {date_ech.strftime('%d/%m/%Y')} — "
                 f"vérification manuelle recommandée"
             )
     else:

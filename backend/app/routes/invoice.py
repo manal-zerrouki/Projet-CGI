@@ -212,7 +212,8 @@ def get_factures():
         return {"error": str(e)}
 
 @router.put("/factures/{numero_facture}")
-def update_commentaire(numero_facture: str, commentaire: str):
+def update_commentaire(numero_facture: str, data: dict):
+    commentaire = data.get("commentaire", "")
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -225,7 +226,8 @@ def update_commentaire(numero_facture: str, commentaire: str):
         conn.close()
         return {"status": "ok", "message": "Commentaire sauvegardé"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"DB update error: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur DB: {str(e)}")
 
 @router.get("/factures/{numero_facture}")
 def get_facture(numero_facture: str):

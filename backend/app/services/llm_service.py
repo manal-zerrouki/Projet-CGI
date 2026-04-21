@@ -20,7 +20,7 @@ MODEL_FALLBACK_1 = os.getenv("MODEL_FALLBACK_1", "").strip()
 MODEL_FALLBACK_2 = os.getenv("MODEL_FALLBACK_2", "").strip()
 MODELS_TO_TRY    = [MODEL_PRIMARY] + [m for m in [MODEL_FALLBACK_1, MODEL_FALLBACK_2] if m]
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Limite OCR (réduit tokens => moins de 503/timeout)
 MAX_OCR_CHARS = int(os.getenv("MAX_OCR_CHARS", "15000"))
@@ -297,7 +297,8 @@ def _detect_cachet_gemini(pdf_path: str) -> tuple:
 
     api_key = GOOGLE_API_KEY
     if not api_key:
-        return None, "GOOGLE_API_KEY manquante"
+        print("Warning: GOOGLE_API_KEY manquante → mode dégradé (OCR + règles locales)")
+        return None, "Gemini API manquante (OCR OK)"
 
     zones_analysed = 0
 
@@ -443,7 +444,17 @@ def extract_invoice_json_from_text(
     """
     api_key = GOOGLE_API_KEY
     if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY manquante")
+        print("Warning: Gemini API manquante → extraction OCR basique")
+        return {
+            "prestataire": None, "ice": None, "date_facture": None,
+            "date_echeance": None, "numero_facture": None, "numero_engagement": None,
+            "montant_ht": None, "tva": None, "taux_tva": None,
+            "montant_ttc": None, "montant_ttc_lettres": None,
+            "retenue_source": None, "net_a_payer": None,
+            "cachet_signature": None, "autres_montants": {},
+            "devise": None, "confidence": 0.0,
+            "warnings": ["Mode dégradé sans Gemini API (ajoutez GOOGLE_API_KEY)"],
+        }
 
     if not ocr_text or len(ocr_text.strip()) < 30:
         return {
