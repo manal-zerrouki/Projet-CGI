@@ -29,6 +29,7 @@ def get_all_factures():
             exception,
             motifs_rejet,
             result_json,
+            commentaire,
             date_creation
         FROM factures_cgi
         ORDER BY date_creation DESC

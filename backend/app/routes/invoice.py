@@ -210,3 +210,47 @@ def get_factures():
         return get_all_factures()
     except Exception as e:
         return {"error": str(e)}
+
+@router.put("/factures/{numero_facture}")
+def update_commentaire(numero_facture: str, commentaire: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE factures_cgi SET commentaire = %s WHERE numero_facture = %s",
+            (commentaire, numero_facture)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"status": "ok", "message": "Commentaire sauvegardé"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/factures/{numero_facture}")
+def get_facture(numero_facture: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM factures_cgi WHERE numero_facture = %s",
+            (numero_facture,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if row:
+            from datetime import date, datetime
+            from decimal import Decimal
+            clean = {}
+            for k, v in row.items():
+                if isinstance(v, (date, datetime)):
+                    clean[k] = v.isoformat()
+                elif isinstance(v, Decimal):
+                    clean[k] = float(v)
+                else:
+                    clean[k] = v
+            return clean
+        return {"error": "Facture non trouvée"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

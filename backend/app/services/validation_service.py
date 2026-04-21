@@ -273,6 +273,7 @@ def _est_facture_marocaine(data: Dict[str, Any]) -> bool:
 
 def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
     motifs = []
+    warnings = []
     for champ, message in CHAMPS_OBLIGATOIRES.items():
         if _is_blank(data.get(champ)):
             motifs.append(message)
@@ -299,10 +300,9 @@ def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
     if not _is_blank(date_ech_str):
         date_ech = _parse_date(date_ech_str)
         if date_ech is not None and today > date_ech:
-            jours = (today - date_ech).days
-            motifs.append(
-                f"Date d'échéance dépassée : échéance le {date_ech.strftime('%d/%m/%Y')}, "
-                f"dépassée de {jours} jour(s)"
+            warnings.append(
+                f"Délai réglementaire 60j dépassé : facture du {date_fac.strftime('%d/%m/%Y')} — "
+                f"vérification manuelle recommandée"
             )
     else:
         # Pas de date d'échéance explicite → délai légal implicite de 60 jours
@@ -312,15 +312,9 @@ def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
             if date_fac is not None:
                 echeance_implicite = date_fac + timedelta(days=60)
                 if today > echeance_implicite:
-                    jours = (today - echeance_implicite).days
-                    motifs.append(
-                        f"Aucune date d'échéance mentionnée — délai réglementaire 60j dépassé : "
-                        f"facture du {date_fac.strftime('%d/%m/%Y')}, "
-                        f"limite le {echeance_implicite.strftime('%d/%m/%Y')} "
-                        f"(dépassée de {jours} jour(s))"
-                    )
+                    warnings.append("date à verifier")
 
-    return motifs
+    return motifs, warnings
 
 
 def _valider_delai(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
@@ -472,7 +466,9 @@ def valider_facture(data: Dict[str, Any]) -> ValidationResult:
     all_warnings: List[str] = _filtrer_warnings_llm(data.get("warnings", []))
 
     # ── Passe 1 : Champs obligatoires ─────────────────────────────────────────
-    all_motifs.extend(_valider_champs_obligatoires(data))
+    champs_motifs, champs_warnings = _valider_champs_obligatoires(data)
+    all_motifs.extend(champs_motifs)
+    all_warnings.extend(champs_warnings)
 
     # ── Passe 2 : Délai des 7 jours ───────────────────────────────────────────
     motifs_delai, warnings_delai = _valider_delai(data)

@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react'
-import { ArrowLeft, CheckCircle, AlertTriangle, XCircle, Copy, Upload, X, Clock } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { ArrowLeft, CheckCircle, AlertTriangle, XCircle, Copy, Upload, X, Clock, Save } from 'lucide-react'
+import PdfPreview from './PdfPreview'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -114,10 +115,15 @@ function StatusBanner({ result }) {
 
 // ── Résultats d'une facture ───────────────────────────────────────────────────
 
-function ResultView({ result, onBack }) {
+function ResultView({ result, item, onBack }) {
   const [tab, setTab] = useState('data')
-  const [openPanel, setOpenPanel] = useState(null) // 'erreurs' | 'warnings' | 'exceptions' | null
+  const [openPanel, setOpenPanel] = useState(null)
+  const [commentaire, setCommentaire] = useState('')
+  const [savingComment, setSavingComment] = useState(false)
   const d = result?.data ?? result
+
+  const API_URL = 'http://127.0.0.1:8000'
+  const numero = d?.numero_facture
 
   const togglePanel = (key) => setOpenPanel(prev => prev === key ? null : key)
 
@@ -230,19 +236,23 @@ function ResultView({ result, onBack }) {
         <div className="p-6">
           {/* ── Données extraites ── */}
           {tab === 'data' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+              <div className="xl:max-h-[600px] xl:overflow-auto">
+                <Section title="Facture originale" icon="🖼️">
+                  <PdfPreview file={item.file} className="w-full h-96 xl:h-[500px]" />
+                </Section>
+              </div>
+              <div>
+                <Section title="Identification" icon="🏢">
+                  <FieldRow label="Prestataire"         value={d?.prestataire}                   missing highlight/>
+                  <FieldRow label="ICE"                 value={d?.ice}                           missing/>
+                  <FieldRow label="N° Facture"          value={d?.numero_facture}                missing highlight/>
+                  <FieldRow label="N° Engagement"   value={d?.numero_engagement}             missing/>
+                  <FieldRow label="Date de facture"     value={fmtDate(d?.date_facture)}         missing/>
+                  <FieldRow label="Date d'échéance"     value={fmtDate(d?.date_echeance)}/>
+                  <FieldRow label="Cachet / Signature"  value={d?.cachet_signature}              missing/>
+                </Section>
 
-              <Section title="Identification" icon="🏢">
-                <FieldRow label="Prestataire"         value={d?.prestataire}                   missing highlight/>
-                <FieldRow label="ICE"                 value={d?.ice}                           missing/>
-                <FieldRow label="N° Facture"          value={d?.numero_facture}                missing highlight/>
-                <FieldRow label="N° Engagement"   value={d?.numero_engagement}             missing/>
-                <FieldRow label="Date de facture"     value={fmtDate(d?.date_facture)}         missing/>
-                <FieldRow label="Date d'échéance"     value={fmtDate(d?.date_echeance)}/>
-                <FieldRow label="Cachet / Signature"  value={d?.cachet_signature}              missing/>
-              </Section>
-
-              <div className="space-y-5">
                 <Section title="Montants" icon="💰">
                   <FieldRow label="Montant HT"       value={fmtAmount(d?.montant_ht, d?.devise)}       missing highlight/>
                   <FieldRow label="TVA"              value={fmtAmount(d?.tva, d?.devise)}/>
@@ -295,6 +305,43 @@ function ResultView({ result, onBack }) {
                     </div>
                   )}
                 </Section>
+
+                <div className="mt-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+                  <label className="block text-sm font-semibold text-blue-800 mb-2">Commentaire</label>
+                  <textarea
+                    value={commentaire}
+                    onChange={(e) => setCommentaire(e.target.value)}
+                    className="w-full p-3 border border-blue-300 rounded-lg resize-vertical focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    rows="3"
+                    placeholder="Ajouter un commentaire manuel..."
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!numero) return
+                      setSavingComment(true)
+                      try {
+                        const res = await fetch(`${API_URL}/factures/${numero}`, {
+                          method: 'PUT',
+                          headers: {'Content-Type': 'application/json'},
+                          body: JSON.stringify({commentaire})
+                        })
+                        if (res.ok) {
+                          alert('Commentaire sauvegardé !')
+                        } else {
+                          alert('Erreur sauvegarde')
+                        }
+                      } catch (e) {
+                        alert('Erreur réseau')
+                      }
+                      setSavingComment(false)
+                    }}
+                    disabled={!numero || savingComment}
+                    className="mt-3 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  >
+                    <Save size={16} />
+                    {savingComment ? 'Sauvegarde...' : 'Valider et sauvegarder'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -378,8 +425,8 @@ export default function Factures({ lastResult, queue, setQueue, handleAddFiles, 
   // Afficher le détail d'un résultat sélectionné
   if (selectedResult) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
-        <ResultView result={selectedResult} onBack={() => setSelectedResult(null)}/>
+      <div className="p-6 max-w-7xl mx-auto">
+        <ResultView result={selectedResult} item={queue.find(i => i.result === selectedResult) || {}} onBack={() => setSelectedResult(null)}/>
       </div>
     )
   }
