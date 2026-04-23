@@ -1,6 +1,47 @@
 import { useState, useRef } from 'react'
 import { ArrowLeft, CheckCircle, AlertTriangle, XCircle, Copy, Upload, X, Clock } from 'lucide-react'
 
+/** Libellés FR — inline dans ce fichier pour qu’ils soient toujours versionnés avec le composant (évite un dossier `locales/` oublié au commit). */
+const L = {
+  tabs: { data: 'Données extraites', ocr: 'Aperçu OCR', json: 'JSON' },
+  sections: {
+    identification: 'Identification',
+    montants: 'Montants',
+    ttcLettres: 'TTC en lettres',
+  },
+  fields: {
+    prestataire: 'Prestataire',
+    ice: 'ICE',
+    iceCgiRef: 'ICE CGI (référence)',
+    numeroFacture: 'N° Facture',
+    numeroEngagement: 'N° Engagement',
+    dateFacture: 'Date de facture',
+    dateEcheance: "Date d'échéance",
+    cachetSignature: 'Cachet / Signature',
+    nomCgiDocument: 'Nom « CGI » dans le document',
+    montantHt: 'Montant HT',
+    tva: 'TVA',
+    tauxTva: 'Taux TVA',
+    totalTtc: 'Total TTC',
+    retenueSource: 'Retenue à la source',
+    retenueGarantie: 'Retenue de garantie (10 % du TTC)',
+    netAPayer: 'Net à payer',
+    devise: 'Devise',
+  },
+  cgiNom: {
+    present: '✓ Détecté (CGI ou C G I)',
+    absent: '✗ Non détecté dans le texte OCR',
+  },
+  uploadPage: {
+    whereTitle: 'Où voir les contrôles CGI ?',
+    whereBody:
+      'Utilisez le menu « Factures », puis après une analyse réussie cliquez sur « Voir détails ». Dans l’onglet « Données extraites » vous trouverez l’ICE CGI de référence, la détection du nom CGI (OCR), et la retenue de garantie (10 % du TTC).',
+    dashboardNote:
+      'L’accueil (tableau de bord) ne montre pas ces champs : ils sont sur la page Factures, dans le détail d’une facture analysée.',
+    iceRefShort: 'ICE CGI (référence projet) : 001592148000076',
+  },
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtAmount(value, devise) {
@@ -12,6 +53,21 @@ function fmtDate(str) {
   if (!str) return null
   try { const [d, m, y] = str.split('-'); return new Date(y, m - 1, d).toLocaleDateString('fr-FR') }
   catch { return str }
+}
+
+/** 10 % du TTC (retenue de garantie), arrondi à 2 décimales */
+function retenueGarantieDixPourcentTtc(montantTtc) {
+  if (montantTtc == null || Number.isNaN(Number(montantTtc))) return null
+  return Math.round(Number(montantTtc) * 0.1 * 100) / 100
+}
+
+/** Présence CGI dans l’aperçu OCR (secours si l’API ne renvoie pas le flag, ex. anciens enregistrements). */
+function inferCgiNomFromOcrPreview(result) {
+  const lines = result?.ocr_preview_lines || []
+  const u = lines.join('\n').toUpperCase()
+  if (!u.trim()) return null
+  const ok = /\bCGI\b/.test(u) || /\bC\s+G\s+I\b/.test(u)
+  return ok
 }
 
 // ── Statut pill ───────────────────────────────────────────────────────────────
@@ -28,11 +84,12 @@ function StatutPill({ statut }) {
 
 // ── Ligne de champ ────────────────────────────────────────────────────────────
 
-function FieldRow({ label, value, highlight, missing }) {
-  const isEmpty = value == null || value === '' || value === false
+function FieldRow({ label, value, highlight, missing, trueLabel, falseLabel }) {
+  const isTriBool = value === true || value === false
+  const isEmpty = isTriBool ? false : (value == null || value === '' || value === false)
   let display = value
-  if (value === true)  display = '✓ Présent'
-  if (value === false) display = '✗ Absent'
+  if (value === true)  display = trueLabel ?? '✓ Présent'
+  if (value === false) display = falseLabel ?? '✗ Absent'
 
   return (
     <div className="flex items-center justify-between px-5 py-3 gap-4 odd:bg-white even:bg-gray-50 last:rounded-b-xl">
@@ -118,6 +175,14 @@ function ResultView({ result, onBack }) {
   const [tab, setTab] = useState('data')
   const [openPanel, setOpenPanel] = useState(null) // 'erreurs' | 'warnings' | 'exceptions' | null
   const d = result?.data ?? result
+
+  const iceCgiRef = result?.ice_cgi_reference ?? '001592148000076'
+  const cgiNomOcr =
+    result?.cgi_nom_present_ocr === true || result?.cgi_nom_present_ocr === false
+      ? result.cgi_nom_present_ocr
+      : inferCgiNomFromOcrPreview(result)
+
+  const retenueGarantie = retenueGarantieDixPourcentTtc(d?.montant_ttc)
 
   const togglePanel = (key) => setOpenPanel(prev => prev === key ? null : key)
 
@@ -218,7 +283,7 @@ function ResultView({ result, onBack }) {
       {/* Tabs */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="flex border-b border-gray-200 px-2">
-          {[['data','Données extraites'],['ocr','Aperçu OCR'],['json','JSON']].map(([id, label]) => (
+          {[['data', L.tabs.data], ['ocr', L.tabs.ocr], ['json', L.tabs.json]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
               className={`px-5 py-3.5 text-sm font-medium transition-colors border-b-2 -mb-px
                 ${tab === id ? 'text-blue-600 border-blue-600' : 'text-gray-500 border-transparent hover:text-gray-700'}`}>
@@ -232,28 +297,36 @@ function ResultView({ result, onBack }) {
           {tab === 'data' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
-              <Section title="Identification" icon="🏢">
-                <FieldRow label="Prestataire"         value={d?.prestataire}                   missing highlight/>
-                <FieldRow label="ICE"                 value={d?.ice}                           missing/>
-                <FieldRow label="N° Facture"          value={d?.numero_facture}                missing highlight/>
-                <FieldRow label="N° Engagement"   value={d?.numero_engagement}             missing/>
-                <FieldRow label="Date de facture"     value={fmtDate(d?.date_facture)}         missing/>
-                <FieldRow label="Date d'échéance"     value={fmtDate(d?.date_echeance)}/>
-                <FieldRow label="Cachet / Signature"  value={d?.cachet_signature}              missing/>
+              <Section title={L.sections.identification} icon="🏢">
+                <FieldRow label={L.fields.prestataire}         value={d?.prestataire}                   missing highlight/>
+                <FieldRow label={L.fields.ice}                 value={d?.ice}                           missing/>
+                <FieldRow label={L.fields.iceCgiRef}           value={iceCgiRef}                        highlight/>
+                <FieldRow
+                  label={L.fields.nomCgiDocument}
+                  value={cgiNomOcr}
+                  trueLabel={L.cgiNom.present}
+                  falseLabel={L.cgiNom.absent}
+                />
+                <FieldRow label={L.fields.numeroFacture}          value={d?.numero_facture}                missing highlight/>
+                <FieldRow label={L.fields.numeroEngagement}   value={d?.numero_engagement}             missing/>
+                <FieldRow label={L.fields.dateFacture}     value={fmtDate(d?.date_facture)}         missing/>
+                <FieldRow label={L.fields.dateEcheance}     value={fmtDate(d?.date_echeance)}/>
+                <FieldRow label={L.fields.cachetSignature}  value={d?.cachet_signature}              missing/>
               </Section>
 
               <div className="space-y-5">
-                <Section title="Montants" icon="💰">
-                  <FieldRow label="Montant HT"       value={fmtAmount(d?.montant_ht, d?.devise)}       missing highlight/>
-                  <FieldRow label="TVA"              value={fmtAmount(d?.tva, d?.devise)}/>
-                  <FieldRow label="Taux TVA"         value={d?.taux_tva != null ? `${d.taux_tva} %` : null}/>
-                  <FieldRow label="Total TTC"        value={fmtAmount(d?.montant_ttc, d?.devise)}      missing highlight/>
-                  <FieldRow label="Retenue à la source" value={fmtAmount(d?.retenue_source, d?.devise)}/>
-                  <FieldRow label="Net à payer"      value={fmtAmount(d?.net_a_payer, d?.devise)}      highlight/>
-                  <FieldRow label="Devise"           value={d?.devise}/>
+                <Section title={L.sections.montants} icon="💰">
+                  <FieldRow label={L.fields.montantHt}       value={fmtAmount(d?.montant_ht, d?.devise)}       missing highlight/>
+                  <FieldRow label={L.fields.tva}              value={fmtAmount(d?.tva, d?.devise)}/>
+                  <FieldRow label={L.fields.tauxTva}         value={d?.taux_tva != null ? `${d.taux_tva} %` : null}/>
+                  <FieldRow label={L.fields.totalTtc}        value={fmtAmount(d?.montant_ttc, d?.devise)}      missing highlight/>
+                  <FieldRow label={L.fields.retenueSource} value={fmtAmount(d?.retenue_source, d?.devise)}/>
+                  <FieldRow label={L.fields.retenueGarantie} value={fmtAmount(retenueGarantie, d?.devise)}/>
+                  <FieldRow label={L.fields.netAPayer}      value={fmtAmount(d?.net_a_payer, d?.devise)}      highlight/>
+                  <FieldRow label={L.fields.devise}           value={d?.devise}/>
                 </Section>
 
-                <Section title="TTC en lettres" icon="📝">
+                <Section title={L.sections.ttcLettres} icon="📝">
                   {d?.montant_ttc_lettres ? (() => {
                     const hasMismatch = (result.motifs_rejet || []).some(m =>
                       m.toLowerCase().includes('en lettres')
@@ -416,6 +489,8 @@ export default function Factures({ lastResult, queue, setQueue, handleAddFiles, 
           Déposez une ou plusieurs factures PDF — elles seront traitées automatiquement.
         </p>
       </div>
+
+    
 
       {/* Zone de dépôt */}
       <MultiDropzone onFiles={onFiles} disabled={isRunning}/>
