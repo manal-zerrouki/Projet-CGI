@@ -8,7 +8,7 @@ Moteur de validation métier des factures :
   Passe 4 — Champs complémentaires   → warning seulement (pas de rejet)
 
 La détection visuelle du cachet/signature est gérée dans llm_service.py
-via Gemini Vision. Ce fichier lit simplement le champ cachet_signature
+via Gemini Vision. Ce fichier lit simplement les champs a_cachet et a_signature
 comme n'importe quel autre champ — il n'appelle plus Anthropic.
 
 Règles warnings vs motifs_rejet :
@@ -16,9 +16,10 @@ Règles warnings vs motifs_rejet :
   exceptions   → champ manquant non bloquant, statut "accepté_avec_réserve"
   warnings     → informatif uniquement, n'affecte pas le statut
 
-Règles cachet/signature :
-  cachet False → absent confirmé  → rejet bloquant
-  cachet None  → détection incertaine (scan flou, pâle…) → exception non-bloquante (vérification manuelle)
+Règles cachet/signature (champs a_cachet et a_signature séparés) :
+  les deux False   → rejet bloquant
+  l'un True        → accepté (warning si l'autre est False)
+  None sur l'un    → exception non-bloquante (document non lisible, vérification manuelle)
 
 Règles dates :
   date_facture + 7j dépassée       → avertissement (non bloquant)
@@ -152,6 +153,37 @@ def _normalize_lettres(t: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _edit_distance(a: str, b: str) -> int:
+    """Distance de Levenshtein entre deux chaînes."""
+    if len(a) < len(b):
+        a, b = b, a
+    row = list(range(len(b) + 1))
+    for c in a:
+        new_row = [row[0] + 1]
+        for j, d in enumerate(b):
+            new_row.append(min(row[j] + (c != d), new_row[-1] + 1, row[j + 1] + 1))
+        row = new_row
+    return row[-1]
+
+
+def _closest_unit(tok: str) -> Optional[int]:
+    """
+    Retourne la valeur du mot de nombre le plus proche (distance ≤ 2).
+    Tokens < 4 caractères ignorés pour éviter les faux positifs
+    (ex: "s", "es", "x" ne sont pas des variantes de chiffres).
+    """
+    if len(tok) < 4:
+        return None
+    best_val, best_dist = None, 3  # seuil max = 2
+    for word, val in _LETTRES_UNITS.items():
+        if abs(len(tok) - len(word)) > 2:
+            continue  # longueur trop différente → pas la peine de calculer
+        d = _edit_distance(tok, word)
+        if d < best_dist:
+            best_val, best_dist = val, d
+    return best_val
+
+
 def _group_value(tokens: list) -> int:
     """Calcule la valeur entière d'un groupe de tokens (max ~999)."""
     v = 0
@@ -162,24 +194,39 @@ def _group_value(tokens: list) -> int:
             v = (v if v > 0 else 1) * 100
         elif tok in _LETTRES_UNITS:
             v += _LETTRES_UNITS[tok]
+        else:
+            # Tentative de correction orthographique automatique
+            approx = _closest_unit(tok)
+            if approx is not None:
+                v += approx
     return v
+
 
 
 def _lettres_to_float(texte: str) -> Optional[float]:
     """
     Convertit un montant en lettres français en float.
-
-    Exemples :
-      "VINGT-TROIS MILLE HUIT CENT QUATRE-VINGTS DIRHAMS" → 23880.0
-      "DEUX MILLE CINQ CENTS EUROS"                       → 2500.0
-      "CENT VINGT MILLE DIRHAMS"                          → 120000.0
+    Gère "X dirhams et Y centimes" → X + Y/100.
 
     Retourne None si la conversion échoue.
     """
     if not texte or not isinstance(texte, str):
         return None
 
-    t = _normalize_lettres(texte)
+    raw = texte.lower().strip()
+
+    # Extraire la partie centimes AVANT normalisation pour éviter qu'elle
+    # soit additionnée à la partie entière.
+    centimes = 0.0
+    m_cent = re.search(r'\bet\s+(.+?)\s+centimes?(?:\([^)]*\))?', raw)
+    if m_cent:
+        c_norm = _normalize_lettres(m_cent.group(1) + " dirham")
+        c_tokens = c_norm.split()
+        c_val = _group_value(c_tokens)
+        centimes = round(c_val / 100, 2)
+        raw = raw[:m_cent.start()] + raw[m_cent.end():]
+
+    t = _normalize_lettres(raw)
     if not t:
         return None
 
@@ -208,7 +255,7 @@ def _lettres_to_float(texte: str) -> Optional[float]:
         else:
             total += g
 
-    return float(total) if total > 0 else None
+    return round(float(total) + centimes, 2) if (total > 0 or centimes > 0) else None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -256,19 +303,20 @@ _DEVISES_ETRANGERES = {"EUR", "USD", "GBP", "CHF"}
 def _est_facture_marocaine(data: Dict[str, Any]) -> bool:
     """
     Détermine si la facture est marocaine (ICE obligatoire) ou étrangère.
-    Se base sur le champ 'devise' extrait par Gemini ("MAD", "EUR", "USD", null).
 
-    Règle :
-      - devise == "MAD" ou null → marocaine (contexte CGI Maroc par défaut)
-      - devise == "EUR" / "USD" / autre devise étrangère → étrangère, ICE non requis
+    Priorité :
+      1. pays_prestataire extrait par Gemini : "Maroc"/"Morocco"/"MA" → marocaine, sinon → étrangère.
+      2. Si pays_prestataire null/absent → fallback sur devise :
+           MAD ou null → marocaine (contexte CGI Maroc par défaut)
+           EUR / USD / … → étrangère, ICE non requis.
     """
+    pays = str(data.get("pays_prestataire") or "").strip().lower()
+    if pays:
+        return pays in ("maroc", "morocco", "ma")
+
+    # Fallback devise
     devise = str(data.get("devise") or "").upper().strip()
-
-    if devise in _DEVISES_ETRANGERES:
-        return False
-
-    # "MAD", "" (null), ou toute autre valeur → on suppose marocaine
-    return True
+    return devise not in _DEVISES_ETRANGERES
 
 
 def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
@@ -277,18 +325,25 @@ def _valider_champs_obligatoires(data: Dict[str, Any]) -> List[str]:
         if _is_blank(data.get(champ)):
             motifs.append(message)
 
-    # ICE : rejet bloquant si facture MAD/devise inconnue (supposée marocaine) et ICE absent.
+    # ICE : rejet bloquant si facture marocaine et ICE absent.
     # Si devise étrangère (EUR, USD…) → géré en exception non-bloquante dans _valider_champs_complementaires.
-    if _est_facture_marocaine(data) and _is_blank(data.get("ice")):
-        motifs.append("ICE (Identifiant Commun de l'Entreprise) manquant")
+    if _est_facture_marocaine(data):
+        ice = data.get("ice")
+        if _is_blank(ice):
+            motifs.append("ICE (Identifiant Commun de l'Entreprise) manquant")
+        else:
+            ice_str = str(ice).strip()
+            if not re.match(r'^\d{15}$', ice_str):
+                motifs.append(
+                    f"ICE invalide : '{ice_str}' — doit contenir exactement 15 chiffres"
+                )
 
-    # cachet_signature est renseigné par llm_service (texte + vision Gemini).
-    # False = Gemini confirme l'absence → rejet bloquant
-    # None  = détection incertaine (scan flou, cachet pâle…) → exception non-bloquante
-    #         gérée dans valider_facture pour ne pas rejeter une facture valide
-    cachet = data.get("cachet_signature")
-    if cachet is False:
-        motifs.append("Cachet ou signature absent de la facture")
+    # Rejet bloquant si AUCUN des deux n'est confirmé présent.
+    # None = incertain (erreur technique / scan flou) → géré en exception non-bloquante.
+    a_cachet    = data.get("a_cachet")
+    a_signature = data.get("a_signature")
+    if a_cachet is False and a_signature is False:
+        motifs.append("Cachet et signature absents de la facture")
 
     # ── Date d'échéance ───────────────────────────────────────────────────────
     # Règle 1 : date_echeance présente et dépassée → rejet bloquant
@@ -410,12 +465,17 @@ def _valider_coherence(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
                 "automatiquement — vérification manuelle requise"
             )
         else:
-            diff_lettres = abs(ttc_from_lettres - ttc)
-            if diff_lettres > 0.10:
+            diff_lettres = ttc_from_lettres - ttc  # positif = lettres > chiffres
+            if abs(diff_lettres) > 0.10:
+                if diff_lettres > 0:
+                    sens = f"les lettres indiquent {diff_lettres:.2f} de plus que les chiffres"
+                else:
+                    sens = f"les lettres indiquent {abs(diff_lettres):.2f} de moins que les chiffres"
                 motifs.append(
-                    f"Incohérence montant en lettres : '{ttc_lettres}' "
-                    f"= {ttc_from_lettres:.2f} ≠ TTC chiffres ({ttc}) "
-                    f"— écart de {diff_lettres:.2f}"
+                    f"Incohérence TTC chiffres / lettres — "
+                    f"TTC chiffres : {ttc:.2f} | "
+                    f"TTC lettres : \"{ttc_lettres}\" → {ttc_from_lettres:.2f} | "
+                    f"Écart : {abs(diff_lettres):.2f} ({sens})"
                 )
             # Si cohérent → aucun message (vérification silencieuse réussie)
 
@@ -438,10 +498,13 @@ def _valider_champs_complementaires(data: Dict[str, Any]) -> List[str]:
     ]
     # ICE absent sur facture étrangère (EUR/USD/…) → exception non-bloquante uniquement
     if not _est_facture_marocaine(data) and _is_blank(data.get("ice")):
+        pays   = data.get("pays_prestataire") or ""
         devise = str(data.get("devise") or "").upper().strip()
+        origine = pays if pays else (devise if devise else "étrangère")
         exceptions.append(
-            f"Facture étrangère ({devise}) — ICE non applicable pour un prestataire étranger, "
-            "vérification manuelle de l'identifiant fiscal recommandée"
+            f"ICE absent — facture étrangère ({origine}) : "
+            "l'ICE est un identifiant marocain non applicable aux prestataires étrangers. "
+            "Vérifier l'identifiant fiscal local (SIRET, TVA intracommunautaire, etc.)"
         )
     return exceptions
 
@@ -454,8 +517,8 @@ def valider_facture(data: Dict[str, Any]) -> ValidationResult:
     """
     Valide une facture à partir du JSON retourné par llm_service.
 
-    Le champ cachet_signature est lu directement depuis data — il a déjà
-    été renseigné par llm_service (détection textuelle + visuelle Gemini).
+    Les champs a_cachet et a_signature sont lus directement depuis data — ils ont déjà
+    été renseignés par llm_service (détection textuelle + visuelle Gemini).
     Ce fichier ne fait aucun appel API.
 
     Args:
@@ -487,11 +550,20 @@ def valider_facture(data: Dict[str, Any]) -> ValidationResult:
     # ── Passe 4 : Champs complémentaires ──────────────────────────────────────
     exceptions = _valider_champs_complementaires(data)
 
-    # cachet None = détection incertaine → exception non-bloquante (accepté_avec_réserve)
-    if data.get("cachet_signature") is None:
+    # Cachet / signature — messages selon le cas détecté
+    a_cachet    = data.get("a_cachet")
+    a_signature = data.get("a_signature")
+
+    if a_cachet is None or a_signature is None:
+        # Détection impossible (scan illisible, erreur API…)
         exceptions.append(
-            "Cachet/signature non confirmé visuellement — vérification manuelle requise"
+            "Document peu lisible — cachet/signature non détectables automatiquement. "
+            "Vérification manuelle obligatoire."
         )
+    elif a_cachet is True and a_signature is False:
+        all_warnings.append("Signature absente — cachet présent (acceptable)")
+    elif a_cachet is False and a_signature is True:
+        all_warnings.append("Cachet absent — signature présente (acceptable)")
 
     # ── Statut final ──────────────────────────────────────────────────────────
     if all_motifs:

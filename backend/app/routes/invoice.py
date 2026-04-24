@@ -116,6 +116,7 @@ async def analyze_invoice(file: UploadFile = File(...)):
                     "t_ocr_ms"      : t_ocr_ms,
                     "t_llm_ms"      : t_llm_ms,
                     "t_total_ms"    : t_total_ms,
+                    "t_response_ms" : round((time.time() - t_start) * 1000),
                     "ocr_chars"     : ocr_chars,
                     "ocr_mots"      : ocr_mots,
                     "confidence_llm": confidence_llm,
@@ -176,6 +177,8 @@ async def analyze_invoice(file: UploadFile = File(...)):
         except Exception as db_error:
             print("DB ERROR:", db_error)
 
+        t_response_ms = round((time.time() - t_start) * 1000)
+
         return {
             "status": "ok",
             "step": "completed",
@@ -189,6 +192,7 @@ async def analyze_invoice(file: UploadFile = File(...)):
                 "t_ocr_ms"      : t_ocr_ms,
                 "t_llm_ms"      : t_llm_ms,
                 "t_total_ms"    : t_total_ms,
+                "t_response_ms" : t_response_ms,
                 "ocr_chars"     : ocr_chars,
                 "ocr_mots"      : ocr_mots,
                 "confidence_llm": confidence_llm,

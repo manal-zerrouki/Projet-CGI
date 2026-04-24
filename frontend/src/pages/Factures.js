@@ -239,7 +239,8 @@ function ResultView({ result, onBack }) {
                 <FieldRow label="N° Engagement"   value={d?.numero_engagement}             missing/>
                 <FieldRow label="Date de facture"     value={fmtDate(d?.date_facture)}         missing/>
                 <FieldRow label="Date d'échéance"     value={fmtDate(d?.date_echeance)}/>
-                <FieldRow label="Cachet / Signature"  value={d?.cachet_signature}              missing/>
+                <FieldRow label="Cachet"              value={d?.a_cachet}                      missing/>
+                <FieldRow label="Signature"           value={d?.a_signature}                   missing/>
               </Section>
 
               <div className="space-y-5">

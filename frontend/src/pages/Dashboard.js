@@ -199,11 +199,12 @@ export default function Dashboard({ factures, dbError }) {
   }
   const fmtMs = (ms) => ms == null ? '—' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 
-  const tempsMoyenTotal = avgMs('t_total_ms')
-  const tempsMoyenOCR   = avgMs('t_ocr_ms')
-  const tempsMoyenLLM   = avgMs('t_llm_ms')
-  const tempsMaxTotal   = maxMs('t_total_ms')
-  const qualiteMoyOCR   = avgMs('ocr_chars')
+  const tempsMoyenOCR      = avgMs('t_ocr_ms')
+  const tempsMoyenLLM      = avgMs('t_llm_ms')
+  const tempsMoyenTotal    = avgMs('t_total_ms')
+  const tempsMoyenResponse = avgMs('t_response_ms')
+  const tempsMaxResponse   = maxMs('t_response_ms')
+  const qualiteMoyOCR      = avgMs('ocr_chars')
 
   // Factures cette semaine
   const cetteSeamaine = factures.filter(f => {
@@ -315,13 +316,20 @@ export default function Dashboard({ factures, dbError }) {
       </div>
 
       {/* KPI cards — ligne 4 : performances techniques */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
         <KPICard
           Icon={Clock}
-          label="Temps moyen analyse"
-          value={fmtMs(tempsMoyenTotal)}
+          label="Temps de réponse moyen"
+          value={fmtMs(tempsMoyenResponse)}
           color="bg-slate-600"
-          sub={tempsMaxTotal != null ? `Max : ${fmtMs(tempsMaxTotal)}` : 'upload → résultat'}
+          sub={tempsMaxResponse != null ? `Max : ${fmtMs(tempsMaxResponse)}` : 'upload → réponse complète'}
+        />
+        <KPICard
+          Icon={Clock}
+          label="Temps traitement pur"
+          value={fmtMs(tempsMoyenTotal)}
+          color="bg-slate-400"
+          sub="OCR + LLM + Vision (sans DB)"
         />
         <KPICard
           Icon={Zap}

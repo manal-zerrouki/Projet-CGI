@@ -88,19 +88,32 @@ RÈGLES MÉTIER
 - date_echeance : chercher "Date d'échéance", "Échéance", "Due date", "Date limite de paiement".
   S'il est absent du document, mettre null. NE PAS calculer cette date.
 - ICE : Identifiant Commun de l'Entreprise (Maroc). Extraire uniquement si clairement indiqué comme "ICE".
+- pays_prestataire : pays du prestataire émetteur. Mettre "Maroc" si l'adresse est marocaine.
+  Si le pays n'est pas explicitement mentionné, l'inférer depuis :
+  • Indicatif téléphonique : +212 ou 05/06/07 → Maroc | +33 → France | +34 → Espagne | +1 → USA/Canada
+  • Code postal : 5 chiffres commençant par 7x/8x/9x/1x/2x/3x/4x/5x/6x → Maroc (ex: 20000, 10000)
+    vs 75xxx/69xxx/13xxx → France | 28xxx/08xxx → Espagne
+  • IBAN : MA → Maroc | FR → France | ES → Espagne | etc.
+  • Numéros d'identification : RC/IF/ICE/CNSS/Patente → Maroc | SIRET/SIREN/TVA FR → France | VAT ES → Espagne
+  • Ville connue : Casablanca, Rabat, Marrakech, Fès… → Maroc | Paris, Lyon… → France
+  Si aucun indice disponible → mettre null.
 - numero_engagement : chercher "Réf. engagement", "N° engagement", "Bon de commande", "BC n°", "PO number".
 - montant_ttc : chercher "TOTAL TTC", "NET À PAYER", "MONTANT DÛ" ou équivalent.
 - montant_ttc_lettres : chercher "Arrêtée la présente facture...", "La somme de...", "Montant en lettres".
 - retenue_source : chercher "RAS", "Retenue à la source", "Retenue de garantie", "RS". Mettre null si absent.
 - net_a_payer : montant final après déduction de la retenue à la source (TTC - RAS).
   Si pas de retenue, net_a_payer = montant_ttc.
-- cachet_signature : mettre true si le texte contient des indices de présence d'un cachet ou d'une signature.
-  Indices positifs : mots "cachet", "signature", "lu et approuvé", "certifié", "signé", "visa",
+- a_cachet : mettre true si le texte contient des indices qu'un tampon/cachet a été APPOSÉ sur le document.
+  Indices positifs : mots "cachet", "tampon", "sceau" apparaissant dans une zone de validation
+  (bas de page, section signature/approbation) — PAS dans le tableau des désignations/produits.
+  IMPORTANT : si "cachet" ou "tampon" apparaît uniquement dans la liste des articles facturés
+  (ex: "Cachet automatique 4911", "Cachet rond"), c'est un nom de produit vendu, PAS un indice
+  de tampon apposé — mettre false dans ce cas.
+  Mettre false uniquement si AUCUN indice de cachet apposé n'est présent.
+- a_signature : mettre true si le texte contient des indices de présence d'une signature manuscrite.
+  Indices positifs : mots "signature", "signé", "lu et approuvé", "certifié", "visa", "paraphé",
   "bon pour accord", "docusign", "docusigned", "signed by", "electronic signature",
-  "signé électroniquement", "paraphé", ou présence d'un bloc circulaire (RC, IF, ICE, CNSS groupés
-  en bas de page hors section coordonnées principale — typique des cachets d'entreprise marocains),
-  ou présence d'un pied de page entreprise avec logo + adresse en bas du document.
-  Mettre false uniquement si AUCUN indice n'est présent.
+  "signé électroniquement". Mettre false uniquement si AUCUN indice de signature n'est présent.
 - autres_montants : dictionnaire clé/valeur pour tout montant présent dans la facture qui ne rentre pas
   dans les champs ci-dessus (ex: "timbre_fiscal": 20.0, "remise": 150.0, "frais_port": 50.0).
   Mettre {} si aucun montant supplémentaire.
@@ -126,9 +139,11 @@ SCHÉMA JSON (respect strict — tous les champs doivent être présents)
   "montant_ttc_lettres": null,
   "retenue_source": null,
   "net_a_payer": null,
-  "cachet_signature": null,
+  "a_cachet": null,
+  "a_signature": null,
   "autres_montants": {},
   "devise": null,
+  "pays_prestataire": null,
   "confidence": 0.0,
   "warnings": []
 }
@@ -139,33 +154,45 @@ SCHÉMA JSON (respect strict — tous les champs doivent être présents)
 # Prompt détection visuelle cachet (Gemini Vision)
 # =========================
 _CACHET_VISION_PROMPT = """
-Analyze this region of an invoice image.
+Analyze this region of an invoice image and detect TWO things independently:
 
-Detect any of the following:
-1. Company stamp or seal — circular, oval, rectangular, even if partially overlapping text or faint
-2. Circular text arranged in a ring/arc around a center (typical Moroccan/French company seal)
-3. Handwritten signature, initials, or paraph
-4. Company logo block at the BOTTOM of the page with name and address — standard authorization
-   footer on French and Moroccan invoices, valid official mark even without a physical stamp border
-5. Any ink mark, colored overlay, or graphic element suggesting authorization or validation
-6. Embossed or watermark-style seals
+A) COMPANY STAMP / SEAL (cachet):
+   A real stamp is a mark PHYSICALLY APPLIED to the document — it is NOT part of the printed template.
+   Valid stamps:
+   - Circular or oval ink stamp (company name arranged in a ring/arc, typical Moroccan/French seal)
+   - Rectangular ink stamp with company name and registration numbers, visually distinct from body text
+   - Embossed or watermark-style seal
+   - Partial or faint ink impression of any of the above
 
-IMPORTANT — Be INCLUSIVE, not restrictive:
-- A circular arrangement of text (company name, city, registration number) IS a company seal
-  → set cachet_trouve = true, type = company_stamp
-- A company logo/name+address block at the BOTTOM is a valid authorization mark
-  → set cachet_trouve = true, type = logo_stamp
-- When in doubt between "stamp present" and "no stamp", prefer cachet_trouve = true with lower confidence
-- Do NOT require the stamp to be perfectly clear or ink-colored
+   NOT a stamp — do NOT set cachet_trouve=true for:
+   - A preprinted company footer line at the very bottom margin (address, phone, email, ICE/RC/CNSS/Patente
+     formatted as a text line or horizontal band — this is part of the invoice template, always present,
+     NOT manually applied)
+   - The company logo or branding at the top of the page
+   - A plain text block that is clearly part of the invoice layout/template
 
-Do NOT flag ONLY these specific cases:
-- The header branding logo at the very TOP of the invoice (top 20% of page)
-- A pure date/reception stamp applied by the RECIPIENT (e.g. "received on...", "ACCUSE DE RECEPTION")
+   Key distinction: a real stamp looks physically applied — slightly tilted, ink bleed, imperfect edges,
+   circular or oval border, color that stands out (blue, purple, red ink circle). A footer is perfectly
+   aligned, same font as the rest of the document, spans the full width.
+
+B) HANDWRITTEN SIGNATURE (signature):
+   - Handwritten signature, initials, or paraph (ink strokes, cursive, irregular lines)
+   - Electronic signature mark (DocuSign, Adobe Sign, etc.)
+   - Any personal ink mark representing individual authorization
+   - Ink strokes, crossing lines, or any handwritten mark INSIDE or ON TOP of a company stamp
+     → these are very common in Moroccan/French invoices and count as a signature
+
+IMPORTANT rules:
+- A signature written ON TOP of or INSIDE a stamp → set BOTH cachet_trouve=true AND signature_trouvee=true
+- If you detect a stamp with ANY ink marks, strokes, or lines inside it beyond just printed text → set signature_trouvee=true
+- When in doubt about a stamp vs printed footer, prefer cachet_trouve=false
+- Do NOT flag: pure date/reception stamp applied by the RECIPIENT ("ACCUSE DE RECEPTION", "REÇU LE")
 
 Return ONLY valid JSON, no markdown, no backticks:
 {
   "cachet_trouve": false,
-  "type": "company_stamp | handwritten_signature | partial_stamp | logo_stamp | none",
+  "signature_trouvee": false,
+  "type": "company_stamp | handwritten_signature | both | partial_stamp | none",
   "description": "precise description of what you observed",
   "confidence": 0.0
 }
@@ -274,44 +301,49 @@ def _extract_cachet_zones(img: "_Image.Image") -> dict:
     }
 
 
-def _detect_cachet_gemini(pdf_path: str) -> tuple:
+def _detect_cachet_signature_gemini(pdf_path: str) -> tuple:
     """
-    Détecte visuellement un cachet/signature dans un PDF via Gemini Vision.
+    Détecte visuellement cachet ET signature séparément dans un PDF via Gemini Vision.
 
-    Stratégie multi-zones : découpe chaque page en 6 zones et les envoie
-    une par une à Gemini. S'arrête dès qu'une détection fiable est trouvée
-    (confidence >= _CACHET_CONFIDENCE_THRESHOLD).
-
-    Args:
-        pdf_path : chemin vers le fichier PDF
+    Stratégie multi-zones : découpe chaque page en 6 zones. S'arrête dès que les deux
+    sont trouvés avec certitude, sinon analyse toutes les zones.
 
     Returns:
-        (found: Optional[bool], details: str)
-          True  → cachet détecté avec certitude
-          False → toutes les zones analysées, aucun cachet trouvé
-          None  → erreur technique (bibliothèque manquante, API KO, etc.)
-                  → l'appelant doit traiter ça comme "incertain", pas "absent"
+        (a_cachet: Optional[bool], a_signature: Optional[bool], details: str)
+          True  → élément détecté avec certitude
+          False → analysé complètement, absent
+          None  → erreur technique → traité comme incertain en validation
     """
     if not _FITZ_AVAILABLE or not _PIL_AVAILABLE:
-        return None, "PyMuPDF ou Pillow non disponible pour la détection visuelle"
+        msg = "PyMuPDF ou Pillow non disponible pour la détection visuelle"
+        return None, None, msg
 
     api_key = GOOGLE_API_KEY
     if not api_key:
-        return None, "GOOGLE_API_KEY manquante"
+        return None, None, "GOOGLE_API_KEY manquante"
 
-    zones_analysed = 0
+    cachet_found    = False
+    signature_found = False
+    zones_analysed  = 0
+    descriptions    = []
 
     try:
         client = genai.Client(api_key=api_key)
         doc    = _fitz.open(pdf_path)
         mat    = _fitz.Matrix(_CACHET_PDF_DPI / 72, _CACHET_PDF_DPI / 72)
 
-        for page_num, page in enumerate(doc):
+        # Dernière page en premier : cachet/signature presque toujours sur la dernière page
+        page_order = list(range(len(doc) - 1, -1, -1)) if len(doc) > 1 else [0]
+        for page_num in page_order:
+            page = doc[page_num]
             pix      = page.get_pixmap(matrix=mat, colorspace=_fitz.csRGB)
             full_img = _Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             zones    = _extract_cachet_zones(full_img)
 
             for zone_name, zone_img in zones.items():
+                # Dès que les deux sont confirmés, inutile d'analyser plus
+                if cachet_found and signature_found:
+                    break
                 try:
                     image_part = {
                         "inline_data": {
@@ -319,45 +351,63 @@ def _detect_cachet_gemini(pdf_path: str) -> tuple:
                             "data"     : _img_to_b64(zone_img),
                         }
                     }
-                    resp   = client.models.generate_content(
-                        model   =MODEL_PRIMARY,
-                        contents=[_CACHET_VISION_PROMPT, image_part],
-                    )
-                    raw    = (resp.text or "").strip()
+                    raw = None
+                    for model_name in MODELS_TO_TRY:
+                        try:
+                            resp = client.models.generate_content(
+                                model   =model_name,
+                                contents=[_CACHET_VISION_PROMPT, image_part],
+                            )
+                            raw = (resp.text or "").strip()
+                            break
+                        except Exception as _model_err:
+                            if "429" in str(_model_err) or "quota" in str(_model_err).lower():
+                                continue  # essayer le modèle suivant
+                            raise
+                    if not raw:
+                        continue
                     raw    = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`")
                     m      = re.search(r"\{.*\}", raw, re.DOTALL)
                     if not m:
                         continue
                     result = json.loads(m.group(0))
                     conf   = float(result.get("confidence", 0.0))
-                    found  = bool(result.get("cachet_trouve", False))
                     zones_analysed += 1
 
-                    if found and conf >= _CACHET_CONFIDENCE_THRESHOLD:
-                        desc = (
-                            f"[page {page_num + 1}/{zone_name}] "
-                            f"{result.get('type', '')} — {result.get('description', '')}"
-                        )
-                        doc.close()
-                        return True, desc
+                    if conf >= _CACHET_CONFIDENCE_THRESHOLD:
+                        if result.get("cachet_trouve", False) and not cachet_found:
+                            cachet_found = True
+                            descriptions.append(
+                                f"[cachet p{page_num+1}/{zone_name}] "
+                                f"{result.get('type','')} — {result.get('description','')}"
+                            )
+                        if result.get("signature_trouvee", False) and not signature_found:
+                            signature_found = True
+                            descriptions.append(
+                                f"[signature p{page_num+1}/{zone_name}] "
+                                f"{result.get('type','')} — {result.get('description','')}"
+                            )
 
-                except Exception:
-                    # Zone ignorée silencieusement, on continue les autres zones
+                except Exception as _zone_err:
+                    descriptions.append(f"[err/{zone_name}] {_zone_err}")
                     continue
+
+            if cachet_found and signature_found:
+                break
 
         doc.close()
 
     except Exception as e:
-        # Erreur technique globale (ouverture PDF, API Gemini KO…)
-        # → incertain, pas absent : on ne rejette pas sur une erreur technique
-        return None, f"Erreur détection cachet : {e}"
+        return None, None, f"Erreur détection visuelle : {e}"
 
-    # Toutes les zones ont été analysées sans résultat positif
     if zones_analysed == 0:
-        # Aucune zone n'a pu être analysée (toutes en erreur) → incertain
-        return None, "Aucune zone n'a pu être analysée (erreurs API)"
+        err_info = " | ".join(descriptions) if descriptions else "raison inconnue"
+        return None, None, f"Aucune zone n'a pu être analysée — {err_info}"
 
-    return False, "Aucun cachet ou signature détecté après analyse complète"
+    details = " | ".join(d for d in descriptions if not d.startswith("[err/"))
+    if not details:
+        details = "Aucun cachet ni signature détecté"
+    return cachet_found, signature_found, details
 
 
 # =========================
@@ -415,6 +465,12 @@ def _post_validate(data: Dict[str, Any]) -> Dict[str, Any]:
     if data.get("ice") == "001592148000076":
         data["ice"] = None
 
+    # Normaliser numero_facture : supprimer les espaces parasites autour de / et -
+    # ex: "006249 /2020" → "006249/2020"
+    num = data.get("numero_facture")
+    if isinstance(num, str):
+        data["numero_facture"] = re.sub(r"\s*([/\-])\s*", r"\1", num.strip())
+
     return data
 
 
@@ -434,12 +490,12 @@ def extract_invoice_json_from_text(
         ocr_text    : texte brut extrait du PDF par ocr_service
         max_retries : nombre de tentatives en cas d'erreur transitoire
         pdf_path    : chemin vers le PDF source (optionnel).
-                      Si fourni ET cachet_signature est False/None après
-                      l'extraction texte, une détection visuelle via
-                      Gemini Vision est lancée automatiquement.
+                      Si fourni, une détection visuelle via Gemini Vision
+                      complète les champs a_cachet et a_signature non confirmés
+                      par l'extraction texte.
 
     Returns:
-        dict avec tous les champs de la facture + cachet_signature fiable
+        dict avec tous les champs de la facture + a_cachet / a_signature fiables
     """
     api_key = GOOGLE_API_KEY
     if not api_key:
@@ -452,7 +508,7 @@ def extract_invoice_json_from_text(
             "montant_ht": None, "tva": None, "taux_tva": None,
             "montant_ttc": None, "montant_ttc_lettres": None,
             "retenue_source": None, "net_a_payer": None,
-            "cachet_signature": None, "autres_montants": {},
+            "a_cachet": None, "a_signature": None, "autres_montants": {},
             "devise": None, "confidence": 0.0,
             "warnings": ["Texte OCR vide ou insuffisant"],
         }
@@ -490,17 +546,21 @@ def extract_invoice_json_from_text(
 
                 validated = _post_validate(parsed)
 
-                # ── Détection visuelle cachet ─────────────────────────────────
-                # Déclenchée si le LLM n'a pas confirmé de cachet (False ou None).
-                # Résultats possibles de _detect_cachet_gemini :
-                #   True  → cachet trouvé visuellement
-                #   False → analysé complètement, rien trouvé (cachet absent)
-                #   None  → erreur technique → traité comme incertain en validation
-                #           (accepté_avec_réserve, pas rejeté)
-                if pdf_path and not validated.get("cachet_signature"):
-                    cachet_found, cachet_desc = _detect_cachet_gemini(pdf_path)
-                    validated["cachet_signature"] = cachet_found
-                    validated["cachet_details"]   = cachet_desc
+                # ── Détection visuelle cachet + signature ─────────────────────
+                # Lancée seulement si le LLM texte n'a pas confirmé les deux.
+                # Économise les appels API quand le texte suffit.
+                needs_vision = pdf_path and (
+                    not validated.get("a_cachet") or not validated.get("a_signature")
+                )
+                if needs_vision:
+                    vis_cachet, vis_sig, vis_desc = _detect_cachet_signature_gemini(pdf_path)
+                    # Vision prime sur LLM si elle confirme explicitement (True ou False).
+                    # None = erreur technique → on conserve le résultat LLM.
+                    if vis_cachet is not None:
+                        validated["a_cachet"] = vis_cachet
+                    if vis_sig is not None:
+                        validated["a_signature"] = vis_sig
+                    validated["cachet_details"] = vis_desc
 
                 return validated
 
