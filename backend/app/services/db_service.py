@@ -1,18 +1,25 @@
-import mysql.connector
+import pymysql
 import os
+from dotenv import load_dotenv
+from datetime import date, datetime
+from decimal import Decimal
+
+load_dotenv()
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST") or "host.docker.internal",
-        port=int(os.getenv("DB_PORT") or 3306), 
+    return pymysql.connect(
+        host=os.getenv("DB_HOST") or "localhost",
+        port=int(os.getenv("DB_PORT") or 3306),
         user=os.getenv("DB_USER") or "root",
         password=os.getenv("DB_PASSWORD") or "",
-        database=os.getenv("DB_NAME") or "factures_db"
+        database=os.getenv("DB_NAME") or "projet_cgi",
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5
     )
 
 def get_all_factures():
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
 
     cursor.execute("""
         SELECT
@@ -38,9 +45,6 @@ def get_all_factures():
     cursor.close()
     conn.close()
 
-    from datetime import date, datetime
-    from decimal import Decimal
-
     result = []
     for row in rows:
         clean = {}
@@ -52,4 +56,5 @@ def get_all_factures():
             else:
                 clean[k] = v
         result.append(clean)
+
     return result

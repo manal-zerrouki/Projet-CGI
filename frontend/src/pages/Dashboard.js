@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { FileText, Clock, CheckCircle, XCircle, AlertTriangle, CalendarDays, Zap, Star, Users, Award, Timer, Activity, AlignLeft } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -28,10 +29,30 @@ function KPICard({ Icon, label, value, color, sub }) {
 }
 
 export default function Dashboard({ factures, dbError }) {
-  const now = new Date()
-  const total = factures.length
+  const [dateDebut, setDateDebut] = useState('')
+  const [dateFin, setDateFin] = useState('')
 
-  const statuts = factures.map(getStatut)
+  const facturesFiltrees = factures.filter(f => {
+    const dateRef = f.date_creation || f.date_facture
+    if (!dateRef) return false
+
+    const d = new Date(dateRef)
+
+    if (dateDebut && d < new Date(dateDebut)) return false
+
+    if (dateFin) {
+      const fin = new Date(dateFin)
+      fin.setHours(23, 59, 59, 999)
+      if (d > fin) return false
+    }
+
+    return true
+  })
+  
+  const now = new Date()
+  const total = facturesFiltrees.length
+
+  const statuts = facturesFiltrees.map(getStatut)
   const nbAccepte = statuts.filter(s => s === 'accepté').length
   const nbReserve = statuts.filter(s => s === 'accepté_avec_réserve').length
   const nbRejete  = statuts.filter(s => s === 'rejeté').length
@@ -42,11 +63,11 @@ export default function Dashboard({ factures, dbError }) {
     const d = new Date(f.date_creation)
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
   }
-  const acceptesMois = factures.filter(f => getStatut(f) === 'accepté' && cesMois(f)).length
-  const rejetesMois  = factures.filter(f => getStatut(f) === 'rejeté'  && cesMois(f)).length
+  const acceptesMois = facturesFiltrees.filter(f => getStatut(f) === 'accepté' && cesMois(f)).length
+  const rejetesMois  = facturesFiltrees.filter(f => getStatut(f) === 'rejeté'  && cesMois(f)).length
 
   // Montants
-  const totalMAD = factures
+  const totalMAD = facturesFiltrees
     .filter(f => (f.devise === 'MAD' || !f.devise) && f.montant_ttc)
     .reduce((s, f) => s + f.montant_ttc, 0)
   // Pie chart
@@ -67,7 +88,7 @@ export default function Dashboard({ factures, dbError }) {
       count: 0,
     }
   })
-  factures.forEach(f => {
+  facturesFiltrees.forEach(f => {
     if (!f.date_creation) return
     const d = new Date(f.date_creation)
     months.forEach(m => {
@@ -80,7 +101,7 @@ export default function Dashboard({ factures, dbError }) {
 
   // Top fournisseurs — avec taux de rejet
   const fMap = {}
-  factures.forEach(f => {
+  facturesFiltrees.forEach(f => {
     if (!f.prestataire) return
     if (!fMap[f.prestataire]) fMap[f.prestataire] = { name: f.prestataire, count: 0, total: 0, rejected: 0 }
     fMap[f.prestataire].count++
@@ -92,7 +113,7 @@ export default function Dashboard({ factures, dbError }) {
   // ── KPIs supplémentaires ──────────────────────────────────────────────────
 
   // Factures aujourd'hui
-  const aujourdHui = factures.filter(f => {
+  const aujourdHui = facturesFiltrees.filter(f => {
     if (!f.date_creation) return false
     return new Date(f.date_creation).toDateString() === now.toDateString()
   }).length
@@ -101,7 +122,7 @@ export default function Dashboard({ factures, dbError }) {
   const tauxAuto = total > 0 ? Math.round((nbAccepte / total) * 100) : 0
 
   // Score LLM moyen (champ confidence dans result_json)
-  const confidenceScores = factures.flatMap(f => {
+  const confidenceScores = facturesFiltrees.flatMap(f => {
     try {
       const r = JSON.parse(f.result_json)
       const c = r?.perf?.confidence_llm ?? r?.data?.confidence
@@ -113,7 +134,7 @@ export default function Dashboard({ factures, dbError }) {
     : null
 
   // Délai moyen soumission = moy(date_creation - date_facture) en jours
-  const delais = factures.flatMap(f => {
+  const delais = facturesFiltrees.flatMap(f => {
     if (!f.date_facture || !f.date_creation) return []
     const df = new Date(f.date_facture)
     const dc = new Date(f.date_creation)
@@ -129,7 +150,7 @@ export default function Dashboard({ factures, dbError }) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (29 - i))
     return { label: d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }), count: 0, _date: d }
   })
-  factures.forEach(f => {
+  facturesFiltrees.forEach(f => {
     if (!f.date_creation) return
     const dc = new Date(f.date_creation)
     last30.forEach(d => {
@@ -151,7 +172,7 @@ export default function Dashboard({ factures, dbError }) {
   const champsManquants = CHAMPS.map(({ key, label }) => ({
     champ: label,
     taux:  total > 0
-      ? Math.round(factures.filter(f => !f[key] && f[key] !== 0).length / total * 100)
+      ? Math.round(facturesFiltrees.filter(f => !f[key] && f[key] !== 0).length / total * 100)
       : 0,
   })).sort((a, b) => b.taux - a.taux)
 
@@ -161,7 +182,7 @@ export default function Dashboard({ factures, dbError }) {
   const tauxRejet = total > 0 ? Math.round((nbRejete / total) * 100) : 0
 
   // Nombre de prestataires uniques
-  const nbPrestataires = new Set(factures.map(f => f.prestataire).filter(Boolean)).size
+  const nbPrestataires = new Set(facturesFiltrees.map(f => f.prestataire).filter(Boolean)).size
 
   // Score global du système (0-100)
   // Formule : validation_auto * 0.4 + conformité * 0.3 + scoreLLM * 0.3
@@ -182,7 +203,7 @@ export default function Dashboard({ factures, dbError }) {
       : `${gainMinutes} min`
 
   // ── Métriques de performance (depuis result_json.perf) ───────────────────
-  const perfData = factures.flatMap(f => {
+  const perfData = facturesFiltrees.flatMap(f => {
     try {
       const r = JSON.parse(f.result_json)
       return r?.perf ? [r.perf] : []
@@ -207,7 +228,7 @@ export default function Dashboard({ factures, dbError }) {
   const qualiteMoyOCR      = avgMs('ocr_chars')
 
   // Factures cette semaine
-  const cetteSeamaine = factures.filter(f => {
+  const cetteSeamaine = facturesFiltrees.filter(f => {
     if (!f.date_creation) return false
     const d = new Date(f.date_creation)
     const diffDays = Math.floor((now - d) / 86400000)
@@ -215,7 +236,7 @@ export default function Dashboard({ factures, dbError }) {
   }).length
 
   // Données OCR vs LLM pour graphique (10 dernières avec perf)
-  const perfByFact = factures
+  const perfByFact = facturesFiltrees
     .filter(f => { try { const r = JSON.parse(f.result_json); return r?.perf?.t_ocr_ms != null } catch { return false } })
     .slice(0, 10)
     .reverse()
@@ -233,7 +254,7 @@ export default function Dashboard({ factures, dbError }) {
 
   // ── Top motifs de rejet ───────────────────────────────────────────────────
   const motifsMap = {}
-  factures.forEach(f => {
+  facturesFiltrees.forEach(f => {
     if (!f.motifs_rejet) return
     try {
       const motifs = JSON.parse(f.motifs_rejet)
@@ -266,7 +287,37 @@ export default function Dashboard({ factures, dbError }) {
           </div>
         </div>
       )}
+<div className="card flex flex-col md:flex-row gap-4 items-start md:items-end">
+  <div>
+    <label className="block text-sm text-gray-500 mb-1">Date début</label>
+    <input
+      type="date"
+      value={dateDebut}
+      onChange={(e) => setDateDebut(e.target.value)}
+      className="border rounded-lg px-3 py-2 text-sm"
+    />
+  </div>
 
+  <div>
+    <label className="block text-sm text-gray-500 mb-1">Date fin</label>
+    <input
+      type="date"
+      value={dateFin}
+      onChange={(e) => setDateFin(e.target.value)}
+      className="border rounded-lg px-3 py-2 text-sm"
+    />
+  </div>
+
+  <button
+    onClick={() => {
+      setDateDebut('')
+      setDateFin('')
+    }}
+    className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm hover:bg-gray-200"
+  >
+    Réinitialiser
+  </button>
+</div>
       {/* KPI cards — ligne 1 : volumes */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <KPICard Icon={FileText}    label="Total factures"        value={total}        color="bg-blue-600"   />
@@ -279,8 +330,8 @@ export default function Dashboard({ factures, dbError }) {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <KPICard Icon={Zap}   label="Taux d'automatisation"  value={`${tauxAuto}%`}                                        color="bg-indigo-500" />
         <KPICard Icon={Star}  label="Score LLM moyen"        value={scoreLLM != null ? `${scoreLLM}%` : '—'}               color="bg-pink-500"   />
-        <KPICard Icon={Clock} label="Délai moyen soumission" value={delaiMoyen != null ? `${delaiMoyen}j` : '—'}           color="bg-teal-500"   />
-        <KPICard Icon={Clock} label="À vérifier ce mois"     value={factures.filter(f => getStatut(f) === 'accepté_avec_réserve' && cesMois(f)).length} color="bg-orange-500" />
+        <KPICard Icon={Clock} label="Délai moyen de remise de facture" value={delaiMoyen != null ? `${delaiMoyen}j` : '—'} color="bg-teal-500" />
+        <KPICard Icon={Clock} label="À vérifier ce mois"     value={facturesFiltrees.filter(f => getStatut(f) === 'accepté_avec_réserve' && cesMois(f)).length} color="bg-orange-500" />
       </div>
 
       {/* KPI cards — ligne 3 : qualité & impact */}
